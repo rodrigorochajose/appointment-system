@@ -1,8 +1,11 @@
+import { GoogleAccountService } from '@/modules/google-account/google-account.service';
 import { Injectable } from '@nestjs/common';
 import { google } from 'googleapis';
 
 @Injectable()
 export class GoogleService {
+  constructor(private googleAccountService: GoogleAccountService) {}
+
   private createOAuthClient() {
     return new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
@@ -55,5 +58,31 @@ export class GoogleService {
     const { data } = await oauth2.userinfo.get();
 
     return data.email!;
+  }
+
+  async getCalendarEvents(workerId: number) {
+    const googleAccount = await this.googleAccountService.findUnique(workerId);
+
+    const calendar = this.getCalendarClient(googleAccount.googleRefreshToken);
+
+    const today = new Date();
+
+    const lastDayOfMonth = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0, 23, 59, 59, 999),
+    );
+
+    const timeMin = today.toISOString();
+    const timeMax = lastDayOfMonth.toISOString();
+
+    console.log(timeMin, timeMax);
+
+    const events = await calendar.events.list({
+      calendarId: googleAccount.googleCalendarId,
+      q: 'Offline',
+      timeMin,
+      timeMax,
+    });
+
+    console.log(events.data.items);
   }
 }

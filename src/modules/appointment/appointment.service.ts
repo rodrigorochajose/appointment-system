@@ -11,7 +11,6 @@ import { handleDatabaseError } from 'src/common/helpers/database-error-handler';
 import { GoogleService } from '@/integrations/google/google.service';
 import { GoogleAccountService } from '../google-account/google-account.service';
 import { UserService } from '../user/user.service';
-import { ScheduleService } from '../schedule/schedule.service';
 import { formatBrazil, parseBrazilDateTime } from '@/common/helpers/brazil-date';
 
 @Injectable()
@@ -22,7 +21,6 @@ export class AppointmentService {
     private googleService: GoogleService,
     private googleAccountService: GoogleAccountService,
     private userService: UserService,
-    private scheduleService: ScheduleService,
   ) {}
 
   async create(data: CreateAppointmentDto): Promise<null> {
