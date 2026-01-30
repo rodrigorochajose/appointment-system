@@ -1,283 +1,91 @@
-# Sistema de Agendamentos API
+## Sistema de Agendamentos (Backend)
 
-Sistema genérico de gerenciamento de agendamentos desenvolvido com NestJS, DrizzleORM e MySQL.
+Este repositório contém o **backend** de um sistema de agendamento onde o **WhatsApp é a interface principal do cliente** e o backend é o “cérebro” que orquestra integrações (principalmente Google Calendar) e, futuramente, uma agenda própria.
 
-## 🚀 Tecnologias
+O produto vai evoluir por **módulos/fases**: começa simples (MVP) e evolui para uma plataforma completa.
 
-- **Framework:** NestJS 10
-- **ORM:** DrizzleORM
-- **Banco de Dados:** MySQL 8.0
-- **Linguagem:** TypeScript
-- **Validação:** class-validator + class-transformer
-- **Autenticação:** JWT (@nestjs/jwt)
-- **Criptografia:** bcrypt
+### Visão do produto (em módulos)
 
-## 📋 Pré-requisitos
+#### Módulo 1 (Fase 1) — MVP: WhatsApp + Google Calendar
 
-- Node.js 20+
-- npm ou yarn
-- Docker e Docker Compose
+**Objetivo**: validar o produto rápido sem construir uma agenda do zero.
 
-## 🔧 Instalação
+**Como funciona (alto nível)**:
 
-### 1. Instalar dependências
+- Cliente (WhatsApp) → Bot → Backend → Google Calendar do profissional
 
-```bash
-npm install
-```
+**Fluxo**:
 
-### 2. Configurar variáveis de ambiente
+- Cliente envia mensagem: “Quero marcar um horário amanhã”
+- Bot interpreta intenção e coleta dados (data, período, serviço, etc.)
+- Backend consulta o Google Calendar do profissional
+- Backend identifica horários disponíveis e devolve opções
+- Cliente escolhe um horário
+- Backend cria/atualiza/cancela evento no Google Calendar
+- Bot confirma pelo WhatsApp
 
-Copie o arquivo `.env.example` para `.env` e configure as variáveis:
+**Para o profissional**:
 
-```bash
-cp .env.example .env
-```
+- Conecta a conta Google ao sistema
+- Continua usando o Google Calendar normalmente no celular
 
-### 3. Iniciar MySQL com Docker
+**Permissões do Google Calendar (Módulo 1)**:
 
-```bash
-docker-compose up -d
-```
+- Ler eventos
+- Criar eventos
+- Atualizar eventos
+- Excluir eventos
 
-### 4. Gerar e executar migrations
+**Limitações esperadas do Módulo 1 (que o Módulo 2 resolve)**:
 
-```bash
-# Gerar migrations
-npm run db:generate
+- Regras avançadas de horários (expediente, folgas, intervalos)
+- Lembretes/reagendamentos com automações robustas
+- Relatórios e gestão completa de clientes/agenda no sistema
+- Gestão do negócio
 
-# Aplicar migrations
-npm run db:push
-```
+#### Módulo 2 (Fase 2) — Agenda própria + Aplicativo
 
-## 🏃 Executar a aplicação
+**Objetivo**: evoluir para um sistema de gestão completo, removendo dependência do Google Calendar.
 
-### Modo desenvolvimento
+**Como funciona (alto nível)**:
 
-```bash
-npm run start:dev
-```
+- Cliente (WhatsApp) → Bot → Backend → Agenda do sistema (MySQL)
+- (Opcional) Aplicativo para o negócio operar e acompanhar tudo
 
-A API estará disponível em: `http://localhost:3000/api`
+**Recursos que entram aqui**:
 
-### Modo produção
+- Horários de funcionamento, exceções e bloqueios manuais
+- Cancelamentos e reagendamentos
+- Lembretes automáticos (WhatsApp/e-mail)
+- Relatórios, controle de clientes e histórico
+- Suporte real a múltiplos profissionais
 
-```bash
-# Build
-npm run build
+### Papel do WhatsApp
 
-# Executar
-npm run start:prod
-```
+O WhatsApp no produto não é só notificação; ele é:
 
-## 📚 Documentação da API
+- Interface de agendamento do cliente
+- Canal de confirmação
+- Canal de cancelamento/reagendamento
+- Canal de lembretes
 
-### Endpoints principais
+**Parte técnica (visão geral)**:
 
-#### Auth
-- `POST /api/auth` - Login de profissional
+- Usuário manda mensagem → Meta chama seu webhook → backend processa → backend responde via API da Meta → mensagem chega no WhatsApp do usuário
 
-#### User (Clientes)
-- `POST /api/user` - Criar usuário (público)
-- `GET /api/user` - Listar usuários (auth)
-- `GET /api/user/:id` - Buscar usuário (auth)
-- `PATCH /api/user/:id` - Atualizar usuário (auth)
-- `DELETE /api/user/:id` - Deletar usuário (auth)
+> Observação: este repositório é do backend. A integração WhatsApp (webhook + envio) entra como parte do produto, mas pode estar em desenvolvimento dependendo do estágio do projeto.
 
-#### Worker (Profissionais)
-- `POST /api/worker` - Criar profissional (público)
-- `GET /api/worker` - Listar profissionais (auth)
-- `GET /api/worker/:id` - Buscar profissional (auth)
-- `PATCH /api/worker/:id` - Atualizar profissional (auth)
-- `DELETE /api/worker/:id` - Deletar profissional (auth)
+### Stack do backend (atual)
 
-#### Offering (Serviços)
-- `POST /api/offering` - Criar serviço (auth)
-- `GET /api/offering` - Listar serviços (auth)
-- `GET /api/offering/:id` - Buscar serviço (auth)
-- `PATCH /api/offering/:id` - Atualizar serviço (auth)
-- `DELETE /api/offering/:id` - Deletar serviço (auth)
+- **Framework**: NestJS 10
+- **ORM**: DrizzleORM
+- **Banco de dados**: MySQL 8.0 (Docker)
+- **Linguagem**: TypeScript
+- **Validação**: class-validator + class-transformer
+- **Autenticação**: JWT (@nestjs/jwt)
+- **Criptografia**: bcrypt
+- **Integração**: Google Calendar (OAuth2)
 
-#### Schedule (Agendas)
-- `POST /api/schedule` - Criar agenda (auth)
-- `GET /api/schedule` - Listar agendas (auth)
-- `GET /api/schedule/:id` - Buscar agenda (auth)
-- `PATCH /api/schedule/:id` - Atualizar agenda (auth)
-- `DELETE /api/schedule/:id` - Deletar agenda (auth)
-
-#### Appointment (Agendamentos)
-- `POST /api/appointment` - Criar agendamento (auth)
-- `GET /api/appointment` - Listar agendamentos (auth)
-- `GET /api/appointment/:id` - Buscar agendamento (auth)
-- `PATCH /api/appointment/:id` - Atualizar agendamento (auth)
-- `DELETE /api/appointment/:id` - Deletar agendamento (auth)
-
-#### UnavailablePeriod (Períodos Indisponíveis)
-- `POST /api/unavailable-period` - Criar período (auth)
-- `GET /api/unavailable-period` - Listar períodos (auth)
-- `GET /api/unavailable-period/:id` - Buscar período (auth)
-- `PATCH /api/unavailable-period/:id` - Atualizar período (auth)
-- `DELETE /api/unavailable-period/:id` - Deletar período (auth)
-
-### Exemplos de uso
-
-#### 1. Criar um profissional
-
-```bash
-curl -X POST http://localhost:3000/api/worker \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "João Silva",
-    "email": "joao@worker.com",
-    "password": "senha123"
-  }'
-```
-
-#### 2. Fazer login
-
-```bash
-curl -X POST http://localhost:3000/api/auth \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "joao@worker.com",
-    "password": "senha123"
-  }'
-```
-
-#### 3. Criar um cliente
-
-```bash
-curl -X POST http://localhost:3000/api/user \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Maria Silva",
-    "email": "maria@email.com",
-    "phone": "+5511999999999"
-  }'
-```
-
-#### 4. Listar usuários (com autenticação)
-
-```bash
-curl -X GET http://localhost:3000/api/user \
-  -H "Authorization: Bearer SEU_TOKEN_AQUI"
-```
-
-## 🗄️ Estrutura do Banco de Dados
-
-### Tabelas
-
-- **user** - Clientes do sistema
-- **worker** - Profissionais/trabalhadores
-- **schedule** - Agendas dos profissionais
-- **offering** - Serviços oferecidos
-- **appointment** - Agendamentos realizados
-- **unavailable_period** - Períodos indisponíveis dos profissionais
-
-## 🔐 Segurança
-
-- Senhas são hasheadas com bcrypt (10 salt rounds)
-- JWT com expiração de 1 hora
-- Validação de inputs com class-validator
-- Guards protegem rotas sensíveis
-
-## 🛠️ Scripts disponíveis
-
-```bash
-# Desenvolvimento
-npm run start:dev
-
-# Build
-npm run build
-
-# Produção
-npm run start:prod
-
-# Database
-npm run db:generate    # Gerar migrations
-npm run db:push        # Aplicar migrations
-npm run db:studio      # Abrir Drizzle Studio
-npm run db:migrate     # Executar migrations manualmente
-
-# Testes
-npm run test
-npm run test:watch
-npm run test:cov
-npm run test:e2e
-
-# Lint e formato
-npm run lint
-npm run format
-```
-
-## 📦 Estrutura do Projeto
-
-```
-appointment-system-api/
-├── src/
-│   ├── common/
-│   │   ├── helpers/
-│   │   │   └── database-error-handler.ts
-│   │   └── interface/
-│   │       └── api-response.interface.ts
-│   ├── database/
-│   │   ├── schemas/
-│   │   │   ├── user.schema.ts
-│   │   │   ├── worker.schema.ts
-│   │   │   ├── schedule.schema.ts
-│   │   │   ├── offering.schema.ts
-│   │   │   ├── appointment.schema.ts
-│   │   │   ├── unavailable-period.schema.ts
-│   │   │   ├── relations.ts
-│   │   │   └── index.ts
-│   │   ├── migrations/
-│   │   ├── database.module.ts
-│   │   └── migrate.ts
-│   ├── modules/
-│   │   ├── auth/
-│   │   ├── user/
-│   │   ├── worker/
-│   │   ├── offering/
-│   │   ├── schedule/
-│   │   ├── appointment/
-│   │   └── unavailable-period/
-│   ├── app.module.ts
-│   └── main.ts
-├── docker-compose.yml
-├── drizzle.config.ts
-├── package.json
-└── tsconfig.json
-```
-
-## 🐛 Solução de Problemas
-
-### Erro de conexão MySQL
-
-Se encontrar erro `ER_NOT_SUPPORTED_AUTH_MODE`:
-
-```bash
-docker exec -it mysql-appointment-dev mysql -u root -p
-# Digite a senha: root
-
-ALTER USER 'appointment'@'%' IDENTIFIED WITH mysql_native_password BY 'appoint123';
-FLUSH PRIVILEGES;
-```
-
-### Migrations não aplicando
-
-```bash
-# Deletar pasta de migrations
-rm -rf src/database/migrations
-
-# Recriar
-npm run db:generate
-npm run db:push
-```
-
-## 📝 Licença
-
-MIT
-
-## 👨‍💻 Autor
-
-Sistema de Agendamentos - 2026
+### Objetivo final (em uma frase)
+
+Um sistema onde o cliente agenda pelo WhatsApp, o backend gerencia a lógica, e o produto evolui de integração com Google Calendar para uma plataforma própria de gestão.
