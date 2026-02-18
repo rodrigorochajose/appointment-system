@@ -39,8 +39,8 @@ export class GoogleController {
     return res.send('Google Calendar conectado com sucesso! Pode fechar.');
   }
 
-  @Get('events')
-  async events(@Query('workerId') workerId: string) {
-    return this.googleService.getCalendarEvents(Number(workerId));
+  @Get('available-slots')
+  async availableSlots(@Query('workerId') workerId: string) {
+    return this.googleService.getAvailableSlots(+workerId);
   }
 }

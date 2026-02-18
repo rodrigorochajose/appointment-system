@@ -1,13 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  Patch,
-  Post,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { UnavailablePeriodService } from './unavailable-period.service';
 import { CreateUnavailablePeriodDto } from './dto/create-unavailable-period.dto';
 import { UpdateUnavailablePeriodDto } from './dto/update-unavailable-period.dto';
@@ -17,14 +8,10 @@ import { AuthGuard } from '../auth/auth.guard';
 @Controller('unavailable-period')
 @UseGuards(AuthGuard)
 export class UnavailablePeriodController {
-  constructor(
-    private readonly unavailablePeriodService: UnavailablePeriodService,
-  ) {}
+  constructor(private readonly unavailablePeriodService: UnavailablePeriodService) {}
 
   @Post()
-  async create(
-    @Body() data: CreateUnavailablePeriodDto,
-  ): Promise<UnavailablePeriodResponseDto> {
+  async create(@Body() data: CreateUnavailablePeriodDto): Promise<UnavailablePeriodResponseDto> {
     return this.unavailablePeriodService.create(data);
   }
 
@@ -34,9 +21,7 @@ export class UnavailablePeriodController {
   }
 
   @Get(':id')
-  async findUnique(
-    @Param('id') id: string,
-  ): Promise<UnavailablePeriodResponseDto> {
+  async findUnique(@Param('id') id: string): Promise<UnavailablePeriodResponseDto> {
     return this.unavailablePeriodService.findUnique(Number(id));
   }
 

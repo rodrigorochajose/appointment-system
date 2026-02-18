@@ -1,11 +1,8 @@
-import {
-  NotFoundException,
-  BadRequestException,
-  ConflictException,
-} from '@nestjs/common';
+import { NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { log } from '@/common/logger';
 
 export function handleDatabaseError(error: any): never {
-  console.error('Database Error:', error);
+  log.error('Database Error', error instanceof Error ? error : { error });
 
   // MySQL Error Codes
   if (error.code === 'ER_DUP_ENTRY') {

@@ -16,9 +16,7 @@ export class UnavailablePeriodService {
     private readonly db: MySql2Database,
   ) {}
 
-  async create(
-    data: CreateUnavailablePeriodDto,
-  ): Promise<UnavailablePeriodResponseDto> {
+  async create(data: CreateUnavailablePeriodDto): Promise<UnavailablePeriodResponseDto> {
     try {
       const [result] = await this.db.insert(unavailablePeriods).values({
         ...data,
@@ -63,10 +61,7 @@ export class UnavailablePeriodService {
       if (data.begin) updateData.begin = new Date(data.begin);
       if (data.end) updateData.end = new Date(data.end);
 
-      await this.db
-        .update(unavailablePeriods)
-        .set(updateData)
-        .where(eq(unavailablePeriods.id, id));
+      await this.db.update(unavailablePeriods).set(updateData).where(eq(unavailablePeriods.id, id));
       return this.findUnique(id);
     } catch (error) {
       handleDatabaseError(error);
@@ -76,9 +71,7 @@ export class UnavailablePeriodService {
   async delete(id: number): Promise<ApiResponse> {
     try {
       await this.findUnique(id); // Verifica se existe
-      await this.db
-        .delete(unavailablePeriods)
-        .where(eq(unavailablePeriods.id, id));
+      await this.db.delete(unavailablePeriods).where(eq(unavailablePeriods.id, id));
       return { message: 'Unavailable period deleted successfully' };
     } catch (error) {
       handleDatabaseError(error);

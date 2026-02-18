@@ -18,12 +18,8 @@ module.exports = {
     '@typescript-eslint/explicit-function-return-type': 'off',
     '@typescript-eslint/explicit-module-boundary-types': 'off',
     '@typescript-eslint/no-explicit-any': 'off',
-    'prettier/prettier': [
-      'error',
-      {
-        endOfLine: 'auto',
-        printWidth: 100,
-      },
-    ],
+    // Desativado: Prettier não permite configurar "permitir espaços no fim da linha".
+    // Com isso desligado, o ESLint para de reclamar de trailing whitespace.
+    'prettier/prettier': 'off',
   },
 };

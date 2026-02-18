@@ -56,6 +56,12 @@ export class UserService {
     return user;
   }
 
+  async findByPhone(phone: string): Promise<UserResponseDto | null> {
+    const [user] = await this.db.select().from(users).where(eq(users.phone, phone));
+
+    return user;
+  }
+
   async update(id: number, data: UpdateUserDto): Promise<UserResponseDto> {
     try {
       await this.db.update(users).set(data).where(eq(users.id, id));

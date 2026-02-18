@@ -10,6 +10,7 @@ import { AppointmentModule } from './modules/appointment/appointment.module';
 import { UnavailablePeriodModule } from './modules/unavailable-period/unavailable-period.module';
 import { GoogleAccountModule } from './modules/google-account/google-account.module';
 import { GoogleModule } from './integrations/google/google.module';
+import { WhatsAppModule } from './integrations/whatsapp/whatsapp.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { GoogleModule } from './integrations/google/google.module';
     UnavailablePeriodModule,
     GoogleAccountModule,
     GoogleModule,
+    WhatsAppModule,
   ],
 })
 export class AppModule {}

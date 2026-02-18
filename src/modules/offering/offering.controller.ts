@@ -1,13 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  Patch,
-  Post,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { OfferingService } from './offering.service';
 import { CreateOfferingDto } from './dto/create-offering.dto';
 import { UpdateOfferingDto } from './dto/update-offering.dto';

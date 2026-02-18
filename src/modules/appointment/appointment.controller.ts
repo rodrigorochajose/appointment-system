@@ -15,11 +15,6 @@ export class AppointmentController {
     return this.appointmentService.create(data);
   }
 
-  @Get()
-  async findMany(): Promise<AppointmentResponseDto[]> {
-    return this.appointmentService.findMany();
-  }
-
   @Get(':id')
   async findUnique(@Param('id') id: string): Promise<AppointmentResponseDto> {
     return this.appointmentService.findUnique(Number(id));

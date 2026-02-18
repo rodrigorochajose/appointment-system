@@ -34,10 +34,7 @@ export class OfferingService {
   }
 
   async findUnique(id: number): Promise<OfferingResponseDto> {
-    const [offering] = await this.db
-      .select()
-      .from(offerings)
-      .where(eq(offerings.id, id));
+    const [offering] = await this.db.select().from(offerings).where(eq(offerings.id, id));
 
     if (!offering) {
       throw new NotFoundException('Offering not found');
@@ -46,10 +43,7 @@ export class OfferingService {
     return offering;
   }
 
-  async update(
-    id: number,
-    data: UpdateOfferingDto,
-  ): Promise<OfferingResponseDto> {
+  async update(id: number, data: UpdateOfferingDto): Promise<OfferingResponseDto> {
     try {
       await this.db.update(offerings).set(data).where(eq(offerings.id, id));
       return this.findUnique(id);

@@ -81,12 +81,17 @@ export class AppointmentService {
           useDefault: false,
           overrides: [],
         },
+        extendedProperties: {
+          private: {
+            type: 'appointment',
+          },
+        },
       },
     });
   }
 
-  async findMany(): Promise<AppointmentResponseDto[]> {
-    return await this.db.select().from(appointments);
+  async findManyByUserId(userId: number): Promise<AppointmentResponseDto[]> {
+    return await this.db.select().from(appointments).where(eq(appointments.userId, userId));
   }
 
   async findUnique(id: number): Promise<AppointmentResponseDto> {
