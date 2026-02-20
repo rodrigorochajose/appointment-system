@@ -5,18 +5,21 @@ import type {
   IncomingMessageParsed,
 } from './dto/whatsapp-webhook.dto';
 import { UserService } from 'src/modules/user/user.service';
-import { ConversationStep, ConversationState } from './conversation-state';
+import { ConversationStep, ConversationData } from './conversation-data';
 import { log } from '@/common/logger';
 import { AppointmentService } from '@/modules/appointment/appointment.service';
-import { ConversationStateService } from './conversation-state/conversation-state.service';
+import { ConversationDataService } from './conversation-data/conversation-data.service';
+import { WhatsAppMessageHandlers } from './handlers';
 
 @Injectable()
 export class WhatsAppService {
   constructor(
     private readonly userService: UserService,
     private readonly appointmentService: AppointmentService,
-    private readonly conversationState: ConversationStateService,
+    private readonly conversationData: ConversationDataService,
+    private readonly messageHandlers: WhatsAppMessageHandlers,
   ) {}
+
   private get verifyToken(): string {
     const token = process.env.WPP_VERIFY_TOKEN;
     if (!token) {
@@ -81,12 +84,12 @@ export class WhatsAppService {
     }
   }
 
-  async getUserState(userPhone: string): Promise<ConversationState> {
+  async getUserState(userPhone: string): Promise<ConversationData> {
     const user = await this.userService.findByPhone(userPhone);
 
     if (!user) {
-      this.conversationState.setState(userPhone, { step: ConversationStep.SIGN_IN });
-      return this.conversationState.getState(userPhone);
+      this.conversationData.setState(userPhone, { step: ConversationStep.SIGN_IN, data: null });
+      return this.conversationData.getState(userPhone);
     }
 
     const userHasApt = await this.appointmentService.findManyByUserId(user.id);
@@ -94,65 +97,30 @@ export class WhatsAppService {
     const userStep =
       userHasApt.length > 0 ? ConversationStep.FULL_MENU : ConversationStep.SCHEDULE_MENU;
 
-    this.conversationState.setState(userPhone, { step: userStep });
+    this.conversationData.setState(userPhone, { step: userStep, data: null });
 
-    return this.conversationState.getState(userPhone);
+    return this.conversationData.getState(userPhone);
   }
 
   async handleMessage(data: IncomingMessageParsed): Promise<void> {
-    let state = this.conversationState.getState(data.from);
+    let conversationData = this.conversationData.getState(data.from);
 
-    if (!state) {
-      state = await this.getUserState(data.from);
+    if (!conversationData) {
+      conversationData = await this.getUserState(data.from);
     }
 
-    switch (state.step) {
-      case ConversationStep.SIGN_IN:
-        await this.sendTextMessage(
-          data.phoneNumberId,
-          data.from,
-          'Olá! Verifiquei que você ainda não está cadastrado. Vamos fazer um breve cadastro para que possa ser identificado em futuros agendamentos.\n Vou te pedir apenas duas informações\n\n Primeiro me informe seu nome completo',
-        );
-        this.conversationState.setState(data.from, { step: ConversationStep.SIGN_IN_GET_NAME });
-        break;
-      case ConversationStep.SIGN_IN_GET_NAME:
-        log.info('[WhatsApp] Nome informado', { name: data.text });
-
-        await this.sendTextMessage(
-          data.phoneNumberId,
-          data.from,
-          'Agora me informe seu email completo',
-        );
-        this.conversationState.setState(data.from, { step: ConversationStep.SIGN_IN_GET_EMAIL });
-        break;
-      case ConversationStep.SIGN_IN_GET_EMAIL:
-        log.info('[WhatsApp] Email informado', { email: data.text });
-
-        await this.sendTextMessage(
-          data.phoneNumberId,
-          data.from,
-          'Agora me informe seu email completo',
-        );
-        this.conversationState.setState(data.from, { step: ConversationStep.SIGN_IN_GET_EMAIL });
-        break;
-      case ConversationStep.CHECK_APT:
-      case ConversationStep.FULL_MENU:
-      case ConversationStep.CANCEL_MANY:
-      case ConversationStep.CANCEL_CONFIRM:
-      case ConversationStep.CANCEL_CONFIRM_ALL:
-      case ConversationStep.CANCEL_CONFIRMED:
-      case ConversationStep.RESCHEDULE_MANY:
-      case ConversationStep.RESCHEDULE_CONFIRM:
-      case ConversationStep.SCHEDULE_MENU:
-      case ConversationStep.SCHEDULE_BY_DAY:
-      case ConversationStep.SCHEDULE_BY_DAY_LIST:
-      case ConversationStep.SCHEDULE_NEXT_AVAILABLE_LIST:
-      case ConversationStep.SCHEDULE_BY_DAY_HOUR:
-      case ConversationStep.SCHEDULE_BY_DAY_HOUR_UNAVAILABLE:
-      case ConversationStep.SCHEDULE_CONFIRM:
-      case ConversationStep.SCHEDULE_CONFIRMED:
-      case ConversationStep.CLOSE:
+    if (conversationData.step === ConversationStep.SIGN_IN_GET_NAME) {
+      conversationData.data = data.text;
     }
+
+    const handlerFn = this.messageHandlers.messageHandlers[conversationData.step];
+    await handlerFn({
+      data,
+      conversationData,
+      sendTextMessage: (phoneNumberId, to, text, previewUrl) =>
+        this.sendTextMessage(phoneNumberId, to, text, previewUrl),
+      setState: (userKey, newState) => this.conversationData.setState(userKey, newState),
+    });
   }
 
   async sendTextMessage(
