@@ -1,22 +1,28 @@
 import { Injectable } from '@nestjs/common';
-import { ConversationData, ConversationStep } from '../conversation-data';
+import { ConversationData, ConversationDataUpdate, ConversationStep } from '../conversation-data';
 import { IncomingMessageParsed } from '../dto/whatsapp-webhook.dto';
 import { log } from '@/common/logger';
+import { UserService } from '@/modules/user/user.service';
+import { AppointmentService } from '@/modules/appointment/appointment.service';
 
 export type MessageHandlerPayload = {
   data: IncomingMessageParsed;
   conversationData: ConversationData;
-  sendTextMessage: (
-    phoneNumberId: string,
-    to: string,
+  setState: (userKey: string, update: ConversationDataUpdate) => void;
+  sendMessage: (
+    type: 'text' | 'button' | 'list',
     text: string,
-    previewUrl?: boolean,
+    options?: Array<{ id: string; title: string }>,
   ) => Promise<void>;
-  setState: (userKey: string, conversationData: ConversationData) => void;
 };
 
 @Injectable()
 export class WhatsAppMessageHandlers {
+  constructor(
+    private readonly userService: UserService,
+    private readonly appointmentService: AppointmentService,
+  ) {}
+
   public readonly messageHandlers: Record<
     ConversationStep,
     (handler: MessageHandlerPayload) => Promise<void>
@@ -45,38 +51,43 @@ export class WhatsAppMessageHandlers {
   };
 
   async handleSignIn(handler: MessageHandlerPayload): Promise<void> {
-    await handler.sendTextMessage(
-      handler.data.phoneNumberId,
-      handler.data.from,
-      'Olá! Verifiquei que você ainda não está cadastrado. Vamos fazer um breve cadastro para que possa ser identificado em futuros agendamentos.\n\nVou te pedir apenas duas informações.\n\nPrimeiro me informe seu nome completo.',
+    await handler.sendMessage(
+      'text',
+      `Olá! Verifiquei que você ainda não está cadastrado. Vamos fazer um breve cadastro para que possa ser identificado em futuros agendamentos\n\n
+      Vou te pedir apenas duas informações.\n\n
+      Primeiro me informe seu nome completo.`,
     );
     handler.setState(handler.data.from, { step: ConversationStep.SIGN_IN_GET_NAME, data: null });
   }
 
   async handleSignInGetName(handler: MessageHandlerPayload): Promise<void> {
-    await handler.sendTextMessage(
-      handler.data.phoneNumberId,
-      handler.data.from,
-      'Agora me informe seu email.',
-    );
-    handler.setState(handler.data.from, {
-      step: ConversationStep.SIGN_IN_GET_EMAIL,
-      data: handler.conversationData.data,
-    });
+    const name = handler.data.text?.trim() ?? '';
+    await handler.sendMessage('text', `Agora me informe seu email.`);
+    handler.setState(handler.data.from, { step: ConversationStep.SIGN_IN_GET_EMAIL, data: name });
   }
 
   async handleSignInGetEmail(handler: MessageHandlerPayload): Promise<void> {
-    console.log(
-      `Criando usuário com nome ${handler.conversationData.data} e email ${handler.data.text}`,
-    );
-    log.debug('handleSignInGetEmail', {
-      from: handler.data.from,
-      step: handler.conversationData.step,
+    const name = handler.conversationData.data ?? '';
+    const email = handler.data.text?.trim() ?? '';
+    const user = await this.userService.create({ name, email, phone: handler.data.from });
+    await handler.sendMessage('text', 'Cadastro concluído! A partir de agora você pode agendar pelo menu.');
+    handler.setState(handler.data.from, {
+      step: ConversationStep.FULL_MENU,
+      data: null,
+      userId: user.id,
     });
   }
 
   async handleCheckApt(handler: MessageHandlerPayload): Promise<void> {
-    log.debug('handleCheckApt', { from: handler.data.from, step: handler.conversationData.step });
+    const userId = handler.conversationData.userId;
+
+    const appointments = await this.appointmentService.findManyByUserId(userId);
+
+    const nextStep =
+      appointments.length > 1 ? ConversationStep.FULL_MENU : ConversationStep.SCHEDULE_MENU;
+
+    handler.setState(handler.data.from, { step: nextStep });
+    return;
   }
 
   async handleFullMenu(handler: MessageHandlerPayload): Promise<void> {

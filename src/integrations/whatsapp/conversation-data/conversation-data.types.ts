@@ -33,4 +33,7 @@ export enum ConversationStep {
 export interface ConversationData {
   step: ConversationStep;
   data: string | null;
+  userId: number | null;
 }
+
+export type ConversationDataUpdate = Partial<ConversationData>;

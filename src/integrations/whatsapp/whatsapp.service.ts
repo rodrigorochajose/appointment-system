@@ -88,7 +88,11 @@ export class WhatsAppService {
     const user = await this.userService.findByPhone(userPhone);
 
     if (!user) {
-      this.conversationData.setState(userPhone, { step: ConversationStep.SIGN_IN, data: null });
+      this.conversationData.setState(userPhone, {
+        step: ConversationStep.SIGN_IN,
+        data: null,
+        userId: null,
+      });
       return this.conversationData.getState(userPhone);
     }
 
@@ -97,7 +101,11 @@ export class WhatsAppService {
     const userStep =
       userHasApt.length > 0 ? ConversationStep.FULL_MENU : ConversationStep.SCHEDULE_MENU;
 
-    this.conversationData.setState(userPhone, { step: userStep, data: null });
+    this.conversationData.setState(userPhone, {
+      step: userStep,
+      data: null,
+      userId: user.id,
+    });
 
     return this.conversationData.getState(userPhone);
   }
@@ -112,41 +120,24 @@ export class WhatsAppService {
     if (conversationData.step === ConversationStep.SIGN_IN_GET_NAME) {
       conversationData.data = data.text;
     }
-
     const handlerFn = this.messageHandlers.messageHandlers[conversationData.step];
+
     await handlerFn({
       data,
       conversationData,
-      sendTextMessage: (phoneNumberId, to, text, previewUrl) =>
-        this.sendTextMessage(phoneNumberId, to, text, previewUrl),
       setState: (userKey, newState) => this.conversationData.setState(userKey, newState),
+      sendMessage: (type, text, options) =>
+        this.buildMessageBodyAndSend(data.phoneNumberId, data.from, type, text, options ?? []),
     });
   }
 
-  async sendTextMessage(
-    phoneNumberId: string,
-    to: string,
-    text: string,
-    previewUrl = false,
-  ): Promise<void> {
+  async sendMessage(phoneNumberId: string, body: unknown): Promise<void> {
     const token = process.env.WPP_TOKEN;
     if (!token) {
       throw new Error('WPP_TOKEN não configurado. Defina no .env para enviar mensagens.');
     }
 
-    const normalizedTo = to.replace(/\D/g, '');
     const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
-
-    const body = {
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to: normalizedTo,
-      type: 'text',
-      text: {
-        body: text.slice(0, 4096),
-        ...(previewUrl && { preview_url: true }),
-      },
-    };
 
     const res = await fetch(url, {
       method: 'POST',
@@ -166,10 +157,98 @@ export class WhatsAppService {
       const msg = data.error?.message ?? `HTTP ${res.status}`;
       throw new Error(`WhatsApp API: ${msg}`);
     }
+  }
 
-    const messageId = data.messages?.[0]?.id;
-    if (messageId) {
-      log.info('[WhatsApp] Mensagem enviada', { to: normalizedTo, messageId });
+  buildMessageBody(
+    to: string,
+    type: 'text' | 'button' | 'list',
+    text: string,
+    options: Array<{ id: string; title: string }>,
+    previewUrl = false,
+  ) {
+    const normalizedTo = to.replace(/\D/g, '');
+
+    const body = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: normalizedTo,
+    };
+
+    switch (type) {
+      case 'text':
+        return {
+          ...body,
+          type: 'text',
+          text: {
+            body: text.slice(0, 4096),
+            ...(previewUrl && { preview_url: true }),
+          },
+        };
+      case 'button':
+        return {
+          ...body,
+          type: 'interactive',
+          interactive: {
+            type: 'button',
+            body: {
+              text,
+            },
+            action: {
+              buttons: options.map((option) => ({
+                type: 'reply',
+                reply: {
+                  id: option.id,
+                  title: option.title,
+                },
+              })),
+            },
+          },
+        };
+      case 'list':
+        return {
+          ...body,
+          type: 'interactive',
+          interactive: {
+            type: 'list',
+            body: {
+              text,
+            },
+            header: {
+              type: 'text',
+              text: 'Escolha um horário',
+            },
+            footer: {
+              text: '',
+            },
+            action: {
+              button: 'Visualizar horários',
+              sections: [
+                {
+                  title: 'Horários disponíveis',
+                  rows: options.map((option) => ({
+                    id: option.id,
+                    title: option.title,
+                    description: '',
+                  })),
+                },
+              ],
+            },
+          },
+        };
     }
+
+    throw new Error(`Tipo de mensagem não suportado: ${type}`);
+  }
+
+  async buildMessageBodyAndSend(
+    phoneNumberId: string,
+    to: string,
+    type: 'text' | 'button' | 'list',
+    text: string,
+    options: Array<{ id: string; title: string }>,
+    previewUrl = false,
+  ): Promise<void> {
+    const body = this.buildMessageBody(to, type, text, options, previewUrl);
+    await this.sendMessage(phoneNumberId, body);
   }
 }
