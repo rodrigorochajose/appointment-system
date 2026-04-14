@@ -16,6 +16,7 @@ export enum ConversationStep {
   RESCHEDULE_CONFIRM = 'RESCHEDULE_CONFIRM',
 
   SCHEDULE_MENU = 'SCHEDULE_MENU',
+  SCHEDULE_MENU_REPLY = 'SCHEDULE_MENU_REPLY',
   SCHEDULE_BY_DAY = 'SCHEDULE_BY_DAY',
   SCHEDULE_BY_DAY_LIST = 'SCHEDULE_BY_DAY_LIST',
 
@@ -29,6 +30,16 @@ export enum ConversationStep {
 
   CLOSE = 'CLOSE',
 }
+
+export enum ScheduleMenuOption {
+  NEXT_APPOINTMENTS = 'next_appointments',
+  BY_DAY = 'by_day',
+}
+
+export const ScheduleMenuLabels: Record<ScheduleMenuOption, string> = {
+  [ScheduleMenuOption.NEXT_APPOINTMENTS]: 'Próximos horários',
+  [ScheduleMenuOption.BY_DAY]: 'Escolher por dia',
+};
 
 export interface ConversationData {
   step: ConversationStep;

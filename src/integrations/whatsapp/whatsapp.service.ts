@@ -34,6 +34,7 @@ export class WhatsAppService {
     challenge: string | undefined,
   ): string | null {
     if (mode !== 'subscribe' || token !== this.verifyToken || !challenge) {
+      log.error('Something is missing');
       return null;
     }
     return challenge;
@@ -61,7 +62,7 @@ export class WhatsAppService {
           const parsed: IncomingMessageParsed = {
             phoneNumberId,
             from: msg.from,
-            text: msg.text?.body,
+            text: msg.text?.body ?? msg.interactive?.button_reply?.id ?? msg.interactive?.list_reply?.id,
           };
           messages.push(parsed);
         }
@@ -84,16 +85,16 @@ export class WhatsAppService {
     }
   }
 
-  async getUserState(userPhone: string): Promise<ConversationData> {
-    const user = await this.userService.findByPhone(userPhone);
+  async getUserState(data: IncomingMessageParsed): Promise<ConversationData> {
+    const user = await this.userService.findByPhone(data.from);
 
     if (!user) {
-      this.conversationData.setState(userPhone, {
+      this.conversationData.setState(data.from, {
         step: ConversationStep.SIGN_IN,
         data: null,
         userId: null,
       });
-      return this.conversationData.getState(userPhone);
+      return this.conversationData.getState(data.from);
     }
 
     const userHasApt = await this.appointmentService.findManyByUserId(user.id);
@@ -101,20 +102,28 @@ export class WhatsAppService {
     const userStep =
       userHasApt.length > 0 ? ConversationStep.FULL_MENU : ConversationStep.SCHEDULE_MENU;
 
-    this.conversationData.setState(userPhone, {
+    await this.buildMessageBodyAndSend(
+      data.phoneNumberId,
+      data.from,
+      'text',
+      `Olá ${user.name}.\nÉ um prazer te ver por aqui novamente`,
+      [],
+    );
+
+    this.conversationData.setState(data.from, {
       step: userStep,
       data: null,
       userId: user.id,
     });
 
-    return this.conversationData.getState(userPhone);
+    return this.conversationData.getState(data.from);
   }
 
   async handleMessage(data: IncomingMessageParsed): Promise<void> {
     let conversationData = this.conversationData.getState(data.from);
 
     if (!conversationData) {
-      conversationData = await this.getUserState(data.from);
+      conversationData = await this.getUserState(data);
     }
 
     if (conversationData.step === ConversationStep.SIGN_IN_GET_NAME) {

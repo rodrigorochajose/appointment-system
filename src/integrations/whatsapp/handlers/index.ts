@@ -1,5 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { ConversationData, ConversationDataUpdate, ConversationStep } from '../conversation-data';
+import {
+  ConversationData,
+  ConversationDataUpdate,
+  ConversationStep,
+  ScheduleMenuLabels,
+  ScheduleMenuOption,
+} from '../conversation-data';
 import { IncomingMessageParsed } from '../dto/whatsapp-webhook.dto';
 import { log } from '@/common/logger';
 import { UserService } from '@/modules/user/user.service';
@@ -39,6 +45,7 @@ export class WhatsAppMessageHandlers {
     [ConversationStep.RESCHEDULE_MANY]: (h) => this.handleRescheduleMany(h),
     [ConversationStep.RESCHEDULE_CONFIRM]: (h) => this.handleRescheduleConfirm(h),
     [ConversationStep.SCHEDULE_MENU]: (h) => this.handleScheduleMenu(h),
+    [ConversationStep.SCHEDULE_MENU_REPLY]: (h) => this.handleScheduleMenuReply(h),
     [ConversationStep.SCHEDULE_BY_DAY]: (h) => this.handleScheduleByDay(h),
     [ConversationStep.SCHEDULE_BY_DAY_LIST]: (h) => this.handleScheduleByDayList(h),
     [ConversationStep.SCHEDULE_NEXT_AVAILABLE_LIST]: (h) => this.handleScheduleNextAvailableList(h),
@@ -53,9 +60,7 @@ export class WhatsAppMessageHandlers {
   async handleSignIn(handler: MessageHandlerPayload): Promise<void> {
     await handler.sendMessage(
       'text',
-      `Olá! Verifiquei que você ainda não está cadastrado. Vamos fazer um breve cadastro para que possa ser identificado em futuros agendamentos\n\n
-      Vou te pedir apenas duas informações.\n\n
-      Primeiro me informe seu nome completo.`,
+      `Olá! Verifiquei que você ainda não está cadastrado. Vamos fazer um breve cadastro para que possa ser identificado em futuros agendamentos\n\nVou te pedir apenas duas informações.\nPrimeiro me informe seu nome completo.`,
     );
     handler.setState(handler.data.from, { step: ConversationStep.SIGN_IN_GET_NAME, data: null });
   }
@@ -70,7 +75,10 @@ export class WhatsAppMessageHandlers {
     const name = handler.conversationData.data ?? '';
     const email = handler.data.text?.trim() ?? '';
     const user = await this.userService.create({ name, email, phone: handler.data.from });
-    await handler.sendMessage('text', 'Cadastro concluído! A partir de agora você pode agendar pelo menu.');
+    await handler.sendMessage(
+      'text',
+      'Cadastro concluído! A partir de agora você pode agendar pelo menu.',
+    );
     handler.setState(handler.data.from, {
       step: ConversationStep.FULL_MENU,
       data: null,
@@ -87,6 +95,7 @@ export class WhatsAppMessageHandlers {
       appointments.length > 1 ? ConversationStep.FULL_MENU : ConversationStep.SCHEDULE_MENU;
 
     handler.setState(handler.data.from, { step: nextStep });
+
     return;
   }
 
@@ -138,6 +147,72 @@ export class WhatsAppMessageHandlers {
       from: handler.data.from,
       step: handler.conversationData.step,
     });
+
+    await handler.sendMessage(
+      'button',
+      'Vamos agendar seu horário?\n\nSe já possuir um dia/horário em mente, pode digita-lo.\nExemplo: *05/02 15:00*\n\nCaso queira escolher outra forma para buscar seu horário, clique nos botões abaixo',
+      Object.values(ScheduleMenuOption).map((id) => ({ id, title: ScheduleMenuLabels[id] })),
+    );
+
+    handler.setState(handler.data.from, { step: ConversationStep.SCHEDULE_MENU_REPLY });
+  }
+
+  async handleScheduleMenuReply(handler: MessageHandlerPayload): Promise<void> {
+    log.debug('handleScheduleMenuReply', {
+      from: handler.data.from,
+      step: handler.conversationData.step,
+    });
+
+    const reply = handler.data.text ?? '';
+
+    if (reply === ScheduleMenuOption.BY_DAY) {
+      handler.setState(handler.data.from, { step: ConversationStep.SCHEDULE_BY_DAY });
+
+      await handler.sendMessage('text', 'Informe o dia desejado\n\nExemplo: *05/02*');
+
+      return;
+    }
+
+    if (reply === ScheduleMenuOption.NEXT_APPOINTMENTS) {
+      await handler.sendMessage('list', 'Aqui estão os próximos horários livres', [
+        {
+          id: '1',
+          title: '14/04 - 10:00',
+        },
+        {
+          id: '2',
+          title: '14/04 - 15:00',
+        },
+        {
+          id: '3',
+          title: '14/04 - 17:00',
+        },
+        {
+          id: '4',
+          title: '15/04 - 09:00',
+        },
+        {
+          id: '5',
+          title: '15/04 - 11:00',
+        },
+        {
+          id: '6',
+          title: '15/04 - 12:00',
+        },
+        {
+          id: '7',
+          title: 'Mais opções',
+        },
+        {
+          id: '8',
+          title: 'Voltar',
+        },
+      ]);
+
+      return;
+    }
+
+    await handler.sendMessage('text', 'Opção inválida');
   }
 
   async handleScheduleByDay(handler: MessageHandlerPayload): Promise<void> {

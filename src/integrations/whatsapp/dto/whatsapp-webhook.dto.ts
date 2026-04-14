@@ -8,12 +8,19 @@ export interface WhatsAppWebhookMessageText {
   body: string;
 }
 
+export interface WhatsAppWebhookMessageInteractive {
+  type: 'button_reply' | 'list_reply';
+  button_reply?: { id: string; title: string };
+  list_reply?: { id: string; title: string; description?: string };
+}
+
 export interface WhatsAppWebhookMessage {
   from: string;
   id: string;
   timestamp: string;
   type: string;
   text?: WhatsAppWebhookMessageText;
+  interactive?: WhatsAppWebhookMessageInteractive;
   /** Outros tipos (image, audio, etc.) têm estruturas próprias. */
   [key: string]: unknown;
 }
