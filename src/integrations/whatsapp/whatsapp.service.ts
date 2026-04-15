@@ -129,14 +129,20 @@ export class WhatsAppService {
     if (conversationData.step === ConversationStep.SIGN_IN_GET_NAME) {
       conversationData.data = data.text;
     }
-    const handlerFn = this.messageHandlers.messageHandlers[conversationData.step];
 
+    await this.executeHandler(conversationData.step, data);
+  }
+
+  private async executeHandler(step: ConversationStep, data: IncomingMessageParsed): Promise<void> {
+    const conversationData = this.conversationData.getState(data.from);
+    const handlerFn = this.messageHandlers.messageHandlers[step];
     await handlerFn({
       data,
       conversationData,
       setState: (userKey, newState) => this.conversationData.setState(userKey, newState),
       sendMessage: (type, text, options) =>
         this.buildMessageBodyAndSend(data.phoneNumberId, data.from, type, text, options ?? []),
+      callHandler: (nextStep) => this.executeHandler(nextStep, data),
     });
   }
 

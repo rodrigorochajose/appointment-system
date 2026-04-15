@@ -2,6 +2,7 @@ export enum ConversationStep {
   SIGN_IN = 'SIGN_IN',
   SIGN_IN_GET_NAME = 'SIGN_IN_GET_NAME',
   SIGN_IN_GET_EMAIL = 'SIGN_IN_GET_EMAIL',
+  SIGN_IN_CONFIRM = 'SIGN_IN_CONFIRM',
 
   CHECK_APT = 'CHECK_APT',
 
@@ -29,6 +30,11 @@ export enum ConversationStep {
   SCHEDULE_CONFIRMED = 'SCHEDULE_CONFIRMED',
 
   CLOSE = 'CLOSE',
+}
+
+export enum SignInConfirmOption {
+  CONFIRM = 'sign_in_confirm',
+  RETRY = 'sign_in_retry',
 }
 
 export enum ScheduleMenuOption {

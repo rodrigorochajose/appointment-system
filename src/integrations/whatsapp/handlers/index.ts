@@ -5,11 +5,13 @@ import {
   ConversationStep,
   ScheduleMenuLabels,
   ScheduleMenuOption,
+  SignInConfirmOption,
 } from '../conversation-data';
 import { IncomingMessageParsed } from '../dto/whatsapp-webhook.dto';
 import { log } from '@/common/logger';
 import { UserService } from '@/modules/user/user.service';
 import { AppointmentService } from '@/modules/appointment/appointment.service';
+import { toTitleCase } from '@/common/helpers/title-case';
 
 export type MessageHandlerPayload = {
   data: IncomingMessageParsed;
@@ -20,6 +22,7 @@ export type MessageHandlerPayload = {
     text: string,
     options?: Array<{ id: string; title: string }>,
   ) => Promise<void>;
+  callHandler: (step: ConversationStep) => Promise<void>;
 };
 
 @Injectable()
@@ -36,6 +39,7 @@ export class WhatsAppMessageHandlers {
     [ConversationStep.SIGN_IN]: (h) => this.handleSignIn(h),
     [ConversationStep.SIGN_IN_GET_NAME]: (h) => this.handleSignInGetName(h),
     [ConversationStep.SIGN_IN_GET_EMAIL]: (h) => this.handleSignInGetEmail(h),
+    [ConversationStep.SIGN_IN_CONFIRM]: (h) => this.handleSignInConfirm(h),
     [ConversationStep.CHECK_APT]: (h) => this.handleCheckApt(h),
     [ConversationStep.FULL_MENU]: (h) => this.handleFullMenu(h),
     [ConversationStep.CANCEL_MANY]: (h) => this.handleCancelMany(h),
@@ -68,22 +72,66 @@ export class WhatsAppMessageHandlers {
   async handleSignInGetName(handler: MessageHandlerPayload): Promise<void> {
     const name = handler.data.text?.trim() ?? '';
     await handler.sendMessage('text', `Agora me informe seu email.`);
-    handler.setState(handler.data.from, { step: ConversationStep.SIGN_IN_GET_EMAIL, data: name });
+    handler.setState(handler.data.from, {
+      step: ConversationStep.SIGN_IN_GET_EMAIL,
+      data: toTitleCase(name),
+    });
   }
 
   async handleSignInGetEmail(handler: MessageHandlerPayload): Promise<void> {
     const name = handler.conversationData.data ?? '';
     const email = handler.data.text?.trim() ?? '';
+
+    await handler.sendMessage(
+      'button',
+      `Confirme seus dados antes de finalizar o cadastro:\n\n*Nome:* ${name}\n*Email:* ${email}`,
+      [
+        { id: SignInConfirmOption.RETRY, title: 'Corrigir' },
+        { id: SignInConfirmOption.CONFIRM, title: 'Confirmar' },
+      ],
+    );
+
+    handler.setState(handler.data.from, {
+      step: ConversationStep.SIGN_IN_CONFIRM,
+      data: JSON.stringify({ name, email }),
+    });
+  }
+
+  async handleSignInConfirm(handler: MessageHandlerPayload): Promise<void> {
+    const reply = handler.data.text ?? '';
+
+    if (reply === SignInConfirmOption.RETRY) {
+      await handler.sendMessage(
+        'text',
+        'Sem problemas! Vamos tentar novamente.\n\nMe informe seu nome completo.',
+      );
+
+      handler.setState(handler.data.from, {
+        step: ConversationStep.SIGN_IN_GET_NAME,
+        data: null,
+      });
+
+      return;
+    }
+
+    const { name, email } = JSON.parse(handler.conversationData.data ?? '{}') as {
+      name: string;
+      email: string;
+    };
     const user = await this.userService.create({ name, email, phone: handler.data.from });
+
     await handler.sendMessage(
       'text',
       'Cadastro concluído! A partir de agora você pode agendar pelo menu.',
     );
+
     handler.setState(handler.data.from, {
-      step: ConversationStep.FULL_MENU,
+      step: ConversationStep.SCHEDULE_MENU,
       data: null,
       userId: user.id,
     });
+
+    await handler.callHandler(ConversationStep.SCHEDULE_MENU);
   }
 
   async handleCheckApt(handler: MessageHandlerPayload): Promise<void> {
@@ -96,7 +144,7 @@ export class WhatsAppMessageHandlers {
 
     handler.setState(handler.data.from, { step: nextStep });
 
-    return;
+    await handler.callHandler(nextStep);
   }
 
   async handleFullMenu(handler: MessageHandlerPayload): Promise<void> {
@@ -170,6 +218,16 @@ export class WhatsAppMessageHandlers {
 
       await handler.sendMessage('text', 'Informe o dia desejado\n\nExemplo: *05/02*');
 
+      return;
+    }
+
+    const directScheduleRegex = /^(\d{2})\/(\d{2})\s(\d{2}):(\d{2})$/;
+    if (directScheduleRegex.test(reply)) {
+      handler.setState(handler.data.from, {
+        step: ConversationStep.SCHEDULE_CONFIRM,
+        data: reply,
+      });
+      await handler.callHandler(ConversationStep.SCHEDULE_CONFIRM);
       return;
     }
 
