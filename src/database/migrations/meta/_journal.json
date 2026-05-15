@@ -15,6 +15,13 @@
       "when": 1769743332216,
       "tag": "0001_famous_thundra",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1778807842692,
+      "tag": "0002_cuddly_unus",
+      "breakpoints": true
     }
   ]
 }

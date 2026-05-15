@@ -8,6 +8,7 @@ import {
   boolean,
   unique,
   longtext,
+  time,
 } from 'drizzle-orm/mysql-core';
 import { sql, relations } from 'drizzle-orm';
 
@@ -142,12 +143,35 @@ export const appointments = mysqlTable(
       .default(sql`CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`),
   },
   (table) => ({
-    datetimeIdx: unique('datetime_idx').on(table.datetime),
+    workerDatetimeIdx: unique('worker_datetime_idx').on(table.workerId, table.datetime),
   }),
 );
 
 export type Appointment = typeof appointments.$inferSelect;
 export type NewAppointment = typeof appointments.$inferInsert;
+
+// ============================================
+// SCHEMA: WORKING HOURS (Jornada de Trabalho)
+// ============================================
+
+export const workingHours = mysqlTable('working_hours', {
+  id: int('id').primaryKey().autoincrement(),
+  scheduleId: int('schedule_id')
+    .notNull()
+    .references(() => schedules.id, { onDelete: 'cascade' }),
+  weekday: int('weekday').notNull(),
+  begin: time('begin').notNull(),
+  end: time('end').notNull(),
+  createdAt: timestamp('created_at')
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: timestamp('updated_at')
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`),
+});
+
+export type WorkingHour = typeof workingHours.$inferSelect;
+export type NewWorkingHour = typeof workingHours.$inferInsert;
 
 export const googleAccounts = mysqlTable('google_account', {
   id: int('id').primaryKey().autoincrement(),
@@ -202,6 +226,14 @@ export const schedulesRelations = relations(schedules, ({ one, many }) => ({
   }),
   appointments: many(appointments),
   unavailablePeriods: many(unavailablePeriods),
+  workingHours: many(workingHours),
+}));
+
+export const workingHoursRelations = relations(workingHours, ({ one }) => ({
+  schedule: one(schedules, {
+    fields: [workingHours.scheduleId],
+    references: [schedules.id],
+  }),
 }));
 
 export const offeringsRelations = relations(offerings, ({ many }) => ({
