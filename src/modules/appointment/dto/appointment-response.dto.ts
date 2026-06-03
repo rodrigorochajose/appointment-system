@@ -5,6 +5,7 @@ export class AppointmentResponseDto {
   offeringId: number;
   datetime: Date;
   fixed: boolean;
+  googleEventId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

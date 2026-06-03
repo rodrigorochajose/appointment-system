@@ -22,6 +22,13 @@
       "when": 1778807842692,
       "tag": "0002_cuddly_unus",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1780153485875,
+      "tag": "0003_simple_randall",
+      "breakpoints": true
     }
   ]
 }

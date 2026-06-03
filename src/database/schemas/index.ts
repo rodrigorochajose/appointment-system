@@ -135,6 +135,7 @@ export const appointments = mysqlTable(
       .references(() => offerings.id, { onDelete: 'restrict' }),
     fixed: boolean('fixed').notNull(),
     datetime: datetime('datetime').notNull(),
+    googleEventId: varchar('google_event_id', { length: 255 }),
     createdAt: timestamp('created_at')
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),

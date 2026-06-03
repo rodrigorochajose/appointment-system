@@ -140,6 +140,7 @@ export class WhatsAppService {
       data,
       conversationData,
       setState: (userKey, newState) => this.conversationData.setState(userKey, newState),
+      resetState: (userKey) => this.conversationData.resetState(userKey),
       sendMessage: (type, text, options) =>
         this.buildMessageBodyAndSend(data.phoneNumberId, data.from, type, text, options ?? []),
       callHandler: (nextStep) => this.executeHandler(nextStep, data),

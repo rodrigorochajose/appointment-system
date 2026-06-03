@@ -1,0 +1,1 @@
+ALTER TABLE `appointment` ADD `google_event_id` varchar(255);
