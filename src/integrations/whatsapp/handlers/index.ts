@@ -92,14 +92,14 @@ export class WhatsAppMessageHandlers {
   async handleSignIn(handler: MessageHandlerPayload): Promise<void> {
     await handler.sendMessage(
       'text',
-      `Olá! Verifiquei que você ainda não está cadastrado. Vamos fazer um breve cadastro para que possa ser identificado em futuros agendamentos\n\nVou te pedir apenas duas informações.\nPrimeiro me informe seu nome completo.`,
+      `👋 Olá! Verifiquei que você ainda não está cadastrado. Vamos fazer um cadastro rápido — assim conseguimos te reconhecer nos próximos agendamentos.\n\nVou te pedir apenas duas informações. 📝\nPara começar, qual é o seu *nome completo*?`,
     );
     handler.setState(handler.data.from, { step: ConversationStep.SIGN_IN_GET_NAME, data: null });
   }
 
   async handleSignInGetName(handler: MessageHandlerPayload): Promise<void> {
     const name = handler.data.text?.trim() ?? '';
-    await handler.sendMessage('text', `Agora me informe seu email.`);
+    await handler.sendMessage('text', `Agora, qual é o seu *email*? 📧`);
     handler.setState(handler.data.from, {
       step: ConversationStep.SIGN_IN_GET_EMAIL,
       data: toTitleCase(name),
@@ -112,10 +112,10 @@ export class WhatsAppMessageHandlers {
 
     await handler.sendMessage(
       'button',
-      `Confirme seus dados antes de finalizar o cadastro:\n\n*Nome:* ${name}\n*Email:* ${email}`,
+      `Confirme seus dados antes de finalizar o cadastro: 📋\n\n*Nome:* ${name}\n*Email:* ${email}`,
       [
-        { id: SignInConfirmOption.CONFIRM, title: 'Confirmar' },
-        { id: SignInConfirmOption.RETRY, title: 'Corrigir' },
+        { id: SignInConfirmOption.CONFIRM, title: '✅ Confirmar' },
+        { id: SignInConfirmOption.RETRY, title: '✏️ Corrigir' },
       ],
     );
 
@@ -131,7 +131,7 @@ export class WhatsAppMessageHandlers {
     if (reply === SignInConfirmOption.RETRY) {
       await handler.sendMessage(
         'text',
-        'Sem problemas! Vamos tentar novamente.\n\nMe informe seu nome completo.',
+        'Sem problemas! Vamos tentar novamente. 🔄\n\nQual é o seu *nome completo*?',
       );
 
       handler.setState(handler.data.from, {
@@ -150,7 +150,7 @@ export class WhatsAppMessageHandlers {
 
     await handler.sendMessage(
       'text',
-      'Cadastro concluído! A partir de agora você pode agendar pelo menu.',
+      '🎉 Cadastro concluído! Vamos ao seu agendamento.',
     );
 
     handler.setState(handler.data.from, {
@@ -180,7 +180,7 @@ export class WhatsAppMessageHandlers {
 
     await handler.sendMessage(
       'button',
-      'O que você gostaria de fazer?',
+      '💈 O que você gostaria de fazer?',
       Object.values(FullMenuOption).map((id) => ({ id, title: FullMenuLabels[id] })),
     );
 
@@ -208,7 +208,7 @@ export class WhatsAppMessageHandlers {
         await this.startCancel(handler);
         return;
       default:
-        await handler.sendMessage('text', 'Opção inválida. Escolha uma das opções do menu.');
+        await handler.sendMessage('text', '⚠️ Opção inválida. Escolha uma das opções do menu.');
         await this.transitionTo(handler, ConversationStep.FULL_MENU);
     }
   }
@@ -221,7 +221,7 @@ export class WhatsAppMessageHandlers {
   private async startCancel(handler: MessageHandlerPayload): Promise<void> {
     const userId = handler.conversationData.userId;
     if (!userId) {
-      await handler.sendMessage('text', 'Ocorreu um erro. Vamos recomeçar.');
+      await handler.sendMessage('text', '⚠️ Ocorreu um erro. Vamos recomeçar.');
       await this.transitionTo(handler, ConversationStep.FULL_MENU);
       return;
     }
@@ -229,7 +229,7 @@ export class WhatsAppMessageHandlers {
     const appointments = await this.appointmentService.findManyByUserId(userId);
 
     if (appointments.length === 0) {
-      await handler.sendMessage('text', 'Você não possui agendamentos para cancelar.');
+      await handler.sendMessage('text', '📭 Você não tem nenhum agendamento para cancelar.');
       await this.transitionTo(handler, ConversationStep.FULL_MENU);
       return;
     }
@@ -240,12 +240,12 @@ export class WhatsAppMessageHandlers {
       return;
     }
 
-    await handler.sendMessage('list', 'Selecione o agendamento que deseja cancelar', [
+    await handler.sendMessage('list', '🗑️ Selecione o agendamento que deseja cancelar', [
       ...appointments.map((apt) => ({
         id: String(apt.id),
         title: this.formatSlotLabel(apt.datetime.toISOString()),
       })),
-      { id: CANCEL_ALL_ID, title: 'Cancelar todos' },
+      { id: CANCEL_ALL_ID, title: '❌ Cancelar todos' },
     ]);
 
     handler.setState(handler.data.from, { step: ConversationStep.CANCEL_MANY });
@@ -257,7 +257,7 @@ export class WhatsAppMessageHandlers {
     const reply = handler.data.text ?? '';
 
     if (reply === CANCEL_ALL_ID) {
-      await handler.sendMessage('button', 'Deseja realmente cancelar *todos* os seus agendamentos?', [
+      await handler.sendMessage('button', '⚠️ Deseja realmente cancelar *todos* os seus agendamentos?', [
         {
           id: ScheduleConfirmOption.CONFIRM,
           title: ScheduleConfirmLabels[ScheduleConfirmOption.CONFIRM],
@@ -273,7 +273,7 @@ export class WhatsAppMessageHandlers {
 
     const appointmentId = Number(reply);
     if (!appointmentId || Number.isNaN(appointmentId)) {
-      await handler.sendMessage('text', 'Seleção inválida. Escolha um agendamento da lista.');
+      await handler.sendMessage('text', '⚠️ Seleção inválida. Escolha um agendamento da lista.');
       return;
     }
 
@@ -281,7 +281,7 @@ export class WhatsAppMessageHandlers {
     try {
       appointment = await this.appointmentService.findUnique(appointmentId);
     } catch {
-      await handler.sendMessage('text', 'Agendamento não encontrado. Escolha um da lista.');
+      await handler.sendMessage('text', '🔍 Agendamento não encontrado. Escolha um da lista.');
       return;
     }
 
@@ -303,7 +303,7 @@ export class WhatsAppMessageHandlers {
 
     const appointmentId = Number(handler.conversationData.data);
     if (!appointmentId || Number.isNaN(appointmentId)) {
-      await handler.sendMessage('text', 'Ocorreu um erro ao cancelar. Vamos recomeçar.');
+      await handler.sendMessage('text', '⚠️ Ocorreu um erro ao cancelar. Vamos recomeçar.');
       await this.transitionTo(handler, ConversationStep.FULL_MENU);
       return;
     }
@@ -315,12 +315,12 @@ export class WhatsAppMessageHandlers {
         'handleCancelConfirm: falha ao cancelar',
         err instanceof Error ? err : { from: handler.data.from, err },
       );
-      await handler.sendMessage('text', 'Não foi possível cancelar agora. Tente novamente.');
+      await handler.sendMessage('text', '😕 Não foi possível cancelar agora. Tente novamente.');
       await this.transitionTo(handler, ConversationStep.FULL_MENU);
       return;
     }
 
-    await this.promptCancelDone(handler, 'Seu agendamento foi cancelado.');
+    await this.promptCancelDone(handler, '✅ Seu agendamento foi cancelado.');
   }
 
   async handleCancelConfirmAll(handler: MessageHandlerPayload): Promise<void> {
@@ -338,7 +338,7 @@ export class WhatsAppMessageHandlers {
 
     const userId = handler.conversationData.userId;
     if (!userId) {
-      await handler.sendMessage('text', 'Ocorreu um erro ao cancelar. Vamos recomeçar.');
+      await handler.sendMessage('text', '⚠️ Ocorreu um erro ao cancelar. Vamos recomeçar.');
       await this.transitionTo(handler, ConversationStep.FULL_MENU);
       return;
     }
@@ -350,12 +350,12 @@ export class WhatsAppMessageHandlers {
         'handleCancelConfirmAll: falha ao cancelar todos',
         err instanceof Error ? err : { from: handler.data.from, err },
       );
-      await handler.sendMessage('text', 'Não foi possível cancelar agora. Tente novamente.');
+      await handler.sendMessage('text', '😕 Não foi possível cancelar agora. Tente novamente.');
       await this.transitionTo(handler, ConversationStep.FULL_MENU);
       return;
     }
 
-    await this.promptCancelDone(handler, 'Todos os seus agendamentos foram cancelados.');
+    await this.promptCancelDone(handler, '✅ Todos os seus agendamentos foram cancelados.');
   }
 
   /** Renderiza a confirmação de cancelamento de um agendamento e aguarda Sim/Não. */
@@ -366,7 +366,7 @@ export class WhatsAppMessageHandlers {
   ): Promise<void> {
     await handler.sendMessage(
       'button',
-      `Deseja realmente cancelar o seguinte agendamento?\n\n*${this.formatSlotLabel(iso)}*`,
+      `⚠️ Deseja realmente cancelar o seguinte agendamento?\n\n🗓️ *${this.formatSlotLabel(iso)}*`,
       [
         {
           id: ScheduleConfirmOption.CONFIRM,
@@ -403,7 +403,7 @@ export class WhatsAppMessageHandlers {
   private async startReschedule(handler: MessageHandlerPayload): Promise<void> {
     const userId = handler.conversationData.userId;
     if (!userId) {
-      await handler.sendMessage('text', 'Ocorreu um erro. Vamos recomeçar.');
+      await handler.sendMessage('text', '⚠️ Ocorreu um erro. Vamos recomeçar.');
       await this.transitionTo(handler, ConversationStep.FULL_MENU);
       return;
     }
@@ -411,7 +411,7 @@ export class WhatsAppMessageHandlers {
     const appointments = await this.appointmentService.findManyByUserId(userId);
 
     if (appointments.length === 0) {
-      await handler.sendMessage('text', 'Você não possui agendamentos para remarcar.');
+      await handler.sendMessage('text', '📭 Você não tem nenhum agendamento para remarcar.');
       await this.transitionTo(handler, ConversationStep.FULL_MENU);
       return;
     }
@@ -421,7 +421,7 @@ export class WhatsAppMessageHandlers {
       this.setRescheduleContext(handler, apt.id, apt.datetime.toISOString());
       await handler.sendMessage(
         'text',
-        `Vamos remarcar seu agendamento de *${this.formatSlotLabel(apt.datetime.toISOString())}*.`,
+        `🔄 Vamos remarcar seu agendamento de *${this.formatSlotLabel(apt.datetime.toISOString())}*.`,
       );
       await this.transitionTo(handler, ConversationStep.SCHEDULE_MENU);
       return;
@@ -429,7 +429,7 @@ export class WhatsAppMessageHandlers {
 
     await handler.sendMessage(
       'list',
-      'Escolha um horário para remarcar',
+      '🔄 Escolha um horário para remarcar',
       appointments.map((apt) => ({
         id: String(apt.id),
         title: this.formatSlotLabel(apt.datetime.toISOString()),
@@ -447,7 +447,7 @@ export class WhatsAppMessageHandlers {
 
     const appointmentId = Number(handler.data.text);
     if (!appointmentId || Number.isNaN(appointmentId)) {
-      await handler.sendMessage('text', 'Seleção inválida. Escolha um agendamento da lista.');
+      await handler.sendMessage('text', '⚠️ Seleção inválida. Escolha um agendamento da lista.');
       return;
     }
 
@@ -455,7 +455,7 @@ export class WhatsAppMessageHandlers {
     try {
       appointment = await this.appointmentService.findUnique(appointmentId);
     } catch {
-      await handler.sendMessage('text', 'Agendamento não encontrado. Escolha um da lista.');
+      await handler.sendMessage('text', '🔍 Agendamento não encontrado. Escolha um da lista.');
       return;
     }
 
@@ -480,7 +480,7 @@ export class WhatsAppMessageHandlers {
     }
 
     if (!context || !newIso) {
-      await handler.sendMessage('text', 'Ocorreu um erro ao remarcar. Vamos recomeçar.');
+      await handler.sendMessage('text', '⚠️ Ocorreu um erro ao remarcar. Vamos recomeçar.');
       handler.setState(handler.data.from, { context: null });
       await this.transitionTo(handler, ConversationStep.FULL_MENU);
       return;
@@ -495,7 +495,7 @@ export class WhatsAppMessageHandlers {
       );
       await handler.sendMessage(
         'text',
-        'Não foi possível remarcar (o horário pode ter sido ocupado). Vamos tentar novamente.',
+        '😕 Não foi possível remarcar — esse horário pode ter sido ocupado. Vamos tentar de novo.',
       );
       await this.transitionTo(handler, ConversationStep.SCHEDULE_MENU);
       return;
@@ -503,7 +503,7 @@ export class WhatsAppMessageHandlers {
 
     await handler.sendMessage(
       'button',
-      `Sua agenda foi remarcada de *${this.formatSlotLabel(context.oldIso)}* para *${this.formatSlotLabel(newIso)}*.`,
+      `✅ Seu agendamento foi remarcado de *${this.formatSlotLabel(context.oldIso)}* para *${this.formatSlotLabel(newIso)}*.`,
       [
         { id: CloseMenuOption.BACK, title: CloseMenuLabels[CloseMenuOption.BACK] },
         { id: CloseMenuOption.END, title: CloseMenuLabels[CloseMenuOption.END] },
@@ -544,12 +544,12 @@ export class WhatsAppMessageHandlers {
     });
 
     const intro = this.getRescheduleContext(handler)
-      ? 'Para qual horário deseja remarcar?'
-      : 'Vamos agendar seu horário?';
+      ? '🔄 Para qual horário deseja remarcar?'
+      : '📅 Vamos agendar seu horário?';
 
     await handler.sendMessage(
       'button',
-      `${intro}\n\nSe já possuir um dia/horário em mente, pode digitá-lo.\nExemplo: *05/02 15:00*\n\nPara visualizar a agenda, acesse o link abaixo e depois digite o dia e horário escolhido:\n${PUBLIC_AGENDA_URL}\n\nCaso prefira buscar de outra forma, use os botões abaixo.`,
+      `${intro}\n\n✍️ Se já tem um dia e horário em mente, é só digitar.\nExemplo: *05/02 15:00*\n\n🔗 Para visualizar a agenda, acesse o link abaixo e depois digite o dia e o horário desejados:\n${PUBLIC_AGENDA_URL}\n\n👇 Caso prefira buscar de outra forma, use os botões abaixo.`,
       Object.values(ScheduleMenuOption).map((id) => ({ id, title: ScheduleMenuLabels[id] })),
     );
 
@@ -565,7 +565,10 @@ export class WhatsAppMessageHandlers {
     const reply = handler.data.text;
 
     if (!reply) {
-      await handler.sendMessage('text', 'Opção inválida');
+      await handler.sendMessage(
+        'text',
+        '⚠️ Não entendi. Escolha uma opção do menu ou digite um dia e horário.\nExemplo: *05/02 15:00*',
+      );
       return;
     }
 
@@ -587,7 +590,7 @@ export class WhatsAppMessageHandlers {
     log.warn('handleScheduleMenuReply: reply inválido', { from: handler.data.from, reply });
     await handler.sendMessage(
       'text',
-      'Formato inválido. Por favor, informe o horário no formato correto.\nExemplo: *05/02 15:00*',
+      '⚠️ Formato inválido. Por favor, informe o horário no formato correto.\nExemplo: *05/02 15:00*',
     );
   }
 
@@ -606,7 +609,7 @@ export class WhatsAppMessageHandlers {
       step: handler.conversationData.step,
     });
 
-    await handler.sendMessage('text', 'Digite o dia que deseja agendar.\n\nExemplo: *05/02*');
+    await handler.sendMessage('text', '🗓️ Digite o dia que deseja agendar.\n\nExemplo: *05/02*');
 
     handler.setState(handler.data.from, { step: ConversationStep.SCHEDULE_BY_DAY_LIST });
   }
@@ -621,7 +624,7 @@ export class WhatsAppMessageHandlers {
     if (!day) {
       await handler.sendMessage(
         'text',
-        'Formato inválido. Informe o dia no formato *DD/MM*.\nExemplo: *05/02*',
+        '⚠️ Formato inválido. Informe o dia no formato *DD/MM*.\nExemplo: *05/02*',
       );
       return;
     }
@@ -634,14 +637,14 @@ export class WhatsAppMessageHandlers {
     if (slots.length === 0) {
       await handler.sendMessage(
         'text',
-        `Não há horários disponíveis no dia ${dd}/${mm}.\nTente outro dia.`,
+        `😕 Não há horários disponíveis no dia ${dd}/${mm}.\nTente outro dia.`,
       );
       return;
     }
 
-    await handler.sendMessage('list', `Aqui estão os horários disponíveis do dia ${dd}/${mm}`, [
+    await handler.sendMessage('list', `⏰ Aqui estão os horários disponíveis do dia ${dd}/${mm}`, [
       ...slots,
-      { id: SCHEDULE_LIST_BACK_ID, title: 'Voltar' },
+      { id: SCHEDULE_LIST_BACK_ID, title: '↩️ Voltar' },
     ]);
 
     handler.setState(handler.data.from, { step: ConversationStep.SCHEDULE_CONFIRM });
@@ -660,7 +663,7 @@ export class WhatsAppMessageHandlers {
     if (slots.length === 0) {
       await handler.sendMessage(
         'text',
-        'Não há horários disponíveis nos próximos dias. Tente novamente mais tarde.',
+        '😕 Não há horários disponíveis nos próximos dias. Tente novamente mais tarde.',
       );
       await this.transitionTo(handler, ConversationStep.SCHEDULE_MENU);
       return;
@@ -668,8 +671,8 @@ export class WhatsAppMessageHandlers {
 
     await handler.sendMessage(
       'list',
-      'Aqui estão os próximos horários disponíveis. Selecione um para agendar ou escolha outra opção.',
-      [...slots, { id: SCHEDULE_LIST_BACK_ID, title: 'Outras opções' }],
+      '⏰ Aqui estão os próximos horários disponíveis. Selecione um para agendar ou escolha outra opção.',
+      [...slots, { id: SCHEDULE_LIST_BACK_ID, title: '🔧 Outras opções' }],
     );
 
     handler.setState(handler.data.from, { step: ConversationStep.SCHEDULE_CONFIRM });
@@ -695,7 +698,7 @@ export class WhatsAppMessageHandlers {
     if (slots.length === 0) {
       await handler.sendMessage(
         'text',
-        `O horário escolhido não está disponível e não há outros horários livres no dia ${dd}/${mm}.\nTente outro dia.`,
+        `😕 O horário escolhido não está disponível e não há outros horários livres no dia ${dd}/${mm}.\nTente outro dia.`,
       );
       await this.transitionTo(handler, ConversationStep.SCHEDULE_MENU);
       return;
@@ -703,8 +706,8 @@ export class WhatsAppMessageHandlers {
 
     await handler.sendMessage(
       'list',
-      'O dia/horário selecionado não está disponível. Aqui estão os horários livres próximos ao de interesse:',
-      [...slots, { id: SCHEDULE_LIST_BACK_ID, title: 'Voltar' }],
+      '⚠️ O dia/horário selecionado não está disponível. Aqui estão os horários livres mais próximos do que você queria:',
+      [...slots, { id: SCHEDULE_LIST_BACK_ID, title: '↩️ Voltar' }],
     );
 
     handler.setState(handler.data.from, { step: ConversationStep.SCHEDULE_CONFIRM });
@@ -718,7 +721,7 @@ export class WhatsAppMessageHandlers {
 
     const iso = handler.conversationData.data;
     if (!iso || Number.isNaN(new Date(iso).getTime())) {
-      await handler.sendMessage('text', 'Ocorreu um erro ao validar o horário. Vamos recomeçar.');
+      await handler.sendMessage('text', '⚠️ Ocorreu um erro ao validar o horário. Vamos recomeçar.');
       await this.transitionTo(handler, ConversationStep.SCHEDULE_MENU);
       return;
     }
@@ -755,7 +758,7 @@ export class WhatsAppMessageHandlers {
 
     // reply é o id da linha selecionada = horário ISO (ex: 2026-02-05T15:00:00-03:00).
     if (!reply || Number.isNaN(new Date(reply).getTime())) {
-      await handler.sendMessage('text', 'Seleção inválida. Por favor, escolha um horário da lista.');
+      await handler.sendMessage('text', '⚠️ Seleção inválida. Por favor, escolha um horário da lista.');
       return;
     }
 
@@ -784,7 +787,7 @@ export class WhatsAppMessageHandlers {
     if (context) {
       await handler.sendMessage(
         'button',
-        `Confirma reagendar de *${this.formatSlotLabel(context.oldIso)}* para *${this.formatSlotLabel(iso)}*?`,
+        `🔄 Confirma a remarcação de *${this.formatSlotLabel(context.oldIso)}* para *${this.formatSlotLabel(iso)}*?`,
         buttons,
       );
       handler.setState(handler.data.from, { step: ConversationStep.RESCHEDULE_CONFIRM, data: iso });
@@ -793,7 +796,7 @@ export class WhatsAppMessageHandlers {
 
     await handler.sendMessage(
       'button',
-      `Confirma o agendamento para *${this.formatSlotLabel(iso)}*?`,
+      `📅 Confirma o agendamento para *${this.formatSlotLabel(iso)}*?`,
       buttons,
     );
     handler.setState(handler.data.from, { step: ConversationStep.SCHEDULE_CONFIRMED, data: iso });
@@ -816,7 +819,7 @@ export class WhatsAppMessageHandlers {
     const userId = handler.conversationData.userId;
 
     if (!iso || !userId) {
-      await handler.sendMessage('text', 'Ocorreu um erro. Vamos recomeçar o agendamento.');
+      await handler.sendMessage('text', '⚠️ Ocorreu um erro. Vamos recomeçar o agendamento.');
       await this.transitionTo(handler, ConversationStep.SCHEDULE_MENU);
       return;
     }
@@ -834,7 +837,7 @@ export class WhatsAppMessageHandlers {
       );
       await handler.sendMessage(
         'text',
-        'Não foi possível concluir o agendamento (o horário pode ter sido ocupado). Vamos tentar novamente.',
+        '😕 Não foi possível concluir o agendamento — esse horário pode ter sido ocupado. Vamos tentar de novo.',
       );
       await this.transitionTo(handler, ConversationStep.SCHEDULE_MENU);
       return;
@@ -844,7 +847,7 @@ export class WhatsAppMessageHandlers {
 
     await handler.sendMessage(
       'button',
-      `✅ Agendamento confirmado!\n\n*Cliente:* ${name}\n*Data:* ${this.formatSlotLabel(iso)}`,
+      `✅ Agendamento confirmado!\n\n👤 *Cliente:* ${name}\n🗓️ *Data:* ${this.formatSlotLabel(iso)}\n\nAté lá! 💈`,
       [
         { id: CloseMenuOption.BACK, title: CloseMenuLabels[CloseMenuOption.BACK] },
         { id: CloseMenuOption.END, title: CloseMenuLabels[CloseMenuOption.END] },

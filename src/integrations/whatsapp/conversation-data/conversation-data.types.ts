@@ -44,9 +44,9 @@ export enum FullMenuOption {
 }
 
 export const FullMenuLabels: Record<FullMenuOption, string> = {
-  [FullMenuOption.SCHEDULE]: 'Agendar',
-  [FullMenuOption.RESCHEDULE]: 'Remarcar',
-  [FullMenuOption.CANCEL]: 'Cancelar',
+  [FullMenuOption.SCHEDULE]: '📅 Agendar',
+  [FullMenuOption.RESCHEDULE]: '🔄 Remarcar',
+  [FullMenuOption.CANCEL]: '❌ Cancelar',
 };
 
 export enum ScheduleMenuOption {
@@ -62,8 +62,8 @@ export interface RescheduleContext {
 }
 
 export const ScheduleMenuLabels: Record<ScheduleMenuOption, string> = {
-  [ScheduleMenuOption.NEXT_APPOINTMENTS]: 'Próximos horários',
-  [ScheduleMenuOption.BY_DAY]: 'Escolher por dia',
+  [ScheduleMenuOption.NEXT_APPOINTMENTS]: '⏰ Próximos horários',
+  [ScheduleMenuOption.BY_DAY]: '🗓️ Escolher por dia',
 };
 
 export enum ScheduleConfirmOption {
@@ -72,8 +72,8 @@ export enum ScheduleConfirmOption {
 }
 
 export const ScheduleConfirmLabels: Record<ScheduleConfirmOption, string> = {
-  [ScheduleConfirmOption.CONFIRM]: 'Sim',
-  [ScheduleConfirmOption.DECLINE]: 'Não',
+  [ScheduleConfirmOption.CONFIRM]: '✅ Sim',
+  [ScheduleConfirmOption.DECLINE]: '🚫 Não',
 };
 
 export enum CloseMenuOption {
@@ -82,8 +82,8 @@ export enum CloseMenuOption {
 }
 
 export const CloseMenuLabels: Record<CloseMenuOption, string> = {
-  [CloseMenuOption.BACK]: 'Voltar',
-  [CloseMenuOption.END]: 'Encerrar',
+  [CloseMenuOption.BACK]: '↩️ Voltar',
+  [CloseMenuOption.END]: '👋 Encerrar',
 };
 
 /** Id da linha "Voltar" injetada nas listas de horários. */
