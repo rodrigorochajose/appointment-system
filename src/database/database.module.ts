@@ -8,10 +8,18 @@ export const DATABASE_CONNECTION = 'DATABASE_CONNECTION';
 
 const databaseProvider = {
   provide: DATABASE_CONNECTION,
-  useFactory: async () => {
-    const connection = await mysql.createConnection(getDbCredentials());
+  useFactory: () => {
+    // Pool em vez de conexão única: provedores serverless (TiDB) fecham
+    // conexões ociosas e o Render free hiberna — o pool reconecta sozinho,
+    // descartando conexões mortas em vez de quebrar a próxima query.
+    const pool = mysql.createPool({
+      ...getDbCredentials(),
+      connectionLimit: 5,
+      enableKeepAlive: true,
+      keepAliveInitialDelay: 10000,
+    });
 
-    return drizzle(connection, { schema, mode: 'default' });
+    return drizzle(pool, { schema, mode: 'default' });
   },
 };
 
