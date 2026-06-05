@@ -17,7 +17,8 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
   app.enableCors();
 
-  await app.listen(process.env.PORT ?? 3000);
-  log.info('Application is running', { url: `http://localhost:${process.env.PORT ?? 3000}/api` });
+  const port = process.env.PORT ?? 3000;
+  await app.listen(port, '0.0.0.0');
+  log.info('Application is running', { url: `http://localhost:${port}/api` });
 }
 bootstrap();

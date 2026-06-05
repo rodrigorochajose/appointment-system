@@ -3,17 +3,12 @@ import { migrate } from 'drizzle-orm/mysql2/migrator';
 import mysql from 'mysql2/promise';
 import * as dotenv from 'dotenv';
 import { log } from '../common/logger';
+import { getDbCredentials } from './db-credentials';
 
 dotenv.config();
 
 async function main() {
-  const connection = await mysql.createConnection({
-    host: process.env.DB_HOST || 'localhost',
-    port: Number(process.env.DB_PORT) || 3306,
-    user: process.env.DB_USER || 'appointment',
-    password: process.env.DB_PASSWORD || 'appoint123',
-    database: process.env.DB_NAME || 'appointmentdb',
-  });
+  const connection = await mysql.createConnection(getDbCredentials());
 
   const db = drizzle(connection);
 

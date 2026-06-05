@@ -7,11 +7,13 @@ export default {
   schema: './src/database/schemas/index.ts',
   out: './src/database/migrations',
   driver: 'mysql2',
-  dbCredentials: {
-    host: process.env.DB_HOST,
-    port: Number(process.env.DB_PORT),
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-  },
+  dbCredentials: process.env.DATABASE_URL
+    ? { uri: process.env.DATABASE_URL }
+    : {
+        host: process.env.DB_HOST,
+        port: Number(process.env.DB_PORT),
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+        database: process.env.DB_NAME,
+      },
 } satisfies Config;
