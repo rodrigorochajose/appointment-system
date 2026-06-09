@@ -24,6 +24,9 @@ services:
         sync: false
       - key: GOOGLE_REDIRECT_URI
         sync: false
+      # Token do endpoint de sincronização reversa (POST /api/sync/google)
+      - key: GOOGLE_SYNC_TOKEN
+        sync: false
       # WhatsApp Cloud API
       - key: WPP_VERIFY_TOKEN
         sync: false

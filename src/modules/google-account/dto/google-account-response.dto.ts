@@ -4,6 +4,7 @@ export class GoogleAccountResponseDto {
   googleCalendarId: string;
   googleRefreshToken: string;
   googleEmail: string;
+  syncToken: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

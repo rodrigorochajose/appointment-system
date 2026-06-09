@@ -7,6 +7,8 @@ import {
   ConversationStep,
   FullMenuLabels,
   FullMenuOption,
+  MoreMenuLabels,
+  MoreMenuOption,
   RescheduleContext,
   ScheduleConfirmLabels,
   ScheduleConfirmOption,
@@ -71,6 +73,8 @@ export class WhatsAppMessageHandlers {
     [ConversationStep.CHECK_APT]: (h) => this.handleCheckApt(h),
     [ConversationStep.FULL_MENU]: (h) => this.handleFullMenu(h),
     [ConversationStep.FULL_MENU_REPLY]: (h) => this.handleFullMenuReply(h),
+    [ConversationStep.MORE_MENU]: (h) => this.handleMoreMenu(h),
+    [ConversationStep.MORE_MENU_REPLY]: (h) => this.handleMoreMenuReply(h),
     [ConversationStep.CANCEL_MANY]: (h) => this.handleCancelMany(h),
     [ConversationStep.CANCEL_CONFIRM]: (h) => this.handleCancelConfirm(h),
     [ConversationStep.CANCEL_CONFIRM_ALL]: (h) => this.handleCancelConfirmAll(h),
@@ -196,21 +200,86 @@ export class WhatsAppMessageHandlers {
     const reply = handler.data.text ?? '';
 
     switch (reply) {
-      case FullMenuOption.SCHEDULE:
-        // agendamento novo: garante que não há contexto de remarcação ativo.
-        handler.setState(handler.data.from, { context: null });
-        await this.transitionTo(handler, ConversationStep.SCHEDULE_MENU);
-        return;
-      case FullMenuOption.RESCHEDULE:
-        await this.startReschedule(handler);
+      case FullMenuOption.LIST:
+        await this.listAppointments(handler);
         return;
       case FullMenuOption.CANCEL:
         await this.startCancel(handler);
+        return;
+      case FullMenuOption.MORE:
+        await this.transitionTo(handler, ConversationStep.MORE_MENU);
         return;
       default:
         await handler.sendMessage('text', '⚠️ Opção inválida. Escolha uma das opções do menu.');
         await this.transitionTo(handler, ConversationStep.FULL_MENU);
     }
+  }
+
+  async handleMoreMenu(handler: MessageHandlerPayload): Promise<void> {
+    log.debug('handleMoreMenu', { from: handler.data.from, step: handler.conversationData.step });
+
+    await handler.sendMessage(
+      'button',
+      '➕ Mais opções',
+      Object.values(MoreMenuOption).map((id) => ({ id, title: MoreMenuLabels[id] })),
+    );
+
+    handler.setState(handler.data.from, { step: ConversationStep.MORE_MENU_REPLY });
+  }
+
+  async handleMoreMenuReply(handler: MessageHandlerPayload): Promise<void> {
+    log.debug('handleMoreMenuReply', {
+      from: handler.data.from,
+      step: handler.conversationData.step,
+    });
+
+    const reply = handler.data.text ?? '';
+
+    switch (reply) {
+      case MoreMenuOption.SCHEDULE:
+        // agendamento novo: garante que não há contexto de remarcação ativo.
+        handler.setState(handler.data.from, { context: null });
+        await this.transitionTo(handler, ConversationStep.SCHEDULE_MENU);
+        return;
+      case MoreMenuOption.RESCHEDULE:
+        await this.startReschedule(handler);
+        return;
+      case MoreMenuOption.BACK:
+        await this.transitionTo(handler, ConversationStep.FULL_MENU);
+        return;
+      default:
+        await handler.sendMessage('text', '⚠️ Opção inválida. Escolha uma das opções do menu.');
+        await this.transitionTo(handler, ConversationStep.MORE_MENU);
+    }
+  }
+
+  /** Lista (somente leitura) os agendamentos do cliente e oferece Voltar/Encerrar. */
+  private async listAppointments(handler: MessageHandlerPayload): Promise<void> {
+    const userId = handler.conversationData.userId;
+    if (!userId) {
+      await handler.sendMessage('text', '⚠️ Ocorreu um erro. Vamos recomeçar.');
+      await this.transitionTo(handler, ConversationStep.FULL_MENU);
+      return;
+    }
+
+    const appointments = await this.appointmentService.findManyByUserId(userId);
+
+    if (appointments.length === 0) {
+      await handler.sendMessage('text', '📭 Você não tem nenhum agendamento.');
+      await this.transitionTo(handler, ConversationStep.FULL_MENU);
+      return;
+    }
+
+    const lines = appointments
+      .map((apt, i) => `${i + 1}. 🗓️ *${this.formatSlotLabel(apt.datetime.toISOString())}*`)
+      .join('\n');
+
+    await handler.sendMessage('button', `📋 Seus agendamentos:\n\n${lines}`, [
+      { id: CloseMenuOption.BACK, title: CloseMenuLabels[CloseMenuOption.BACK] },
+      { id: CloseMenuOption.END, title: CloseMenuLabels[CloseMenuOption.END] },
+    ]);
+
+    handler.setState(handler.data.from, { step: ConversationStep.CLOSE, data: null });
   }
 
   /**
@@ -603,6 +672,18 @@ export class WhatsAppMessageHandlers {
     await handler.callHandler(step);
   }
 
+  /** true se a data estiver além da janela de agendamento permitida ao cliente. */
+  private isBeyondBookingWindow(date: Date): boolean {
+    return date.getTime() >= this.appointmentService.getBookingWindow().endExclusive.getTime();
+  }
+
+  /** Mensagem padrão quando o cliente tenta agendar além da janela permitida. */
+  private bookingLimitMessage(): string {
+    const { lastDay } = this.appointmentService.getBookingWindow();
+    const [, mm, dd] = formatBrazil(lastDay).slice(0, 10).split('-');
+    return `😕 Só é possível agendar até *${dd}/${mm}*.\nEscolha uma data dentro desse período.`;
+  }
+
   async handleScheduleByDay(handler: MessageHandlerPayload): Promise<void> {
     log.debug('handleScheduleByDay', {
       from: handler.data.from,
@@ -626,6 +707,11 @@ export class WhatsAppMessageHandlers {
         'text',
         '⚠️ Formato inválido. Informe o dia no formato *DD/MM*.\nExemplo: *05/02*',
       );
+      return;
+    }
+
+    if (this.isBeyondBookingWindow(day)) {
+      await handler.sendMessage('text', this.bookingLimitMessage());
       return;
     }
 
@@ -722,6 +808,12 @@ export class WhatsAppMessageHandlers {
     const iso = handler.conversationData.data;
     if (!iso || Number.isNaN(new Date(iso).getTime())) {
       await handler.sendMessage('text', '⚠️ Ocorreu um erro ao validar o horário. Vamos recomeçar.');
+      await this.transitionTo(handler, ConversationStep.SCHEDULE_MENU);
+      return;
+    }
+
+    if (this.isBeyondBookingWindow(new Date(iso))) {
+      await handler.sendMessage('text', this.bookingLimitMessage());
       await this.transitionTo(handler, ConversationStep.SCHEDULE_MENU);
       return;
     }

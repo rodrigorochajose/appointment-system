@@ -17,9 +17,21 @@ import { ApiResponse } from 'src/common/interface/api-response.interface';
 import { handleDatabaseError } from 'src/common/helpers/database-error-handler';
 import { GoogleService } from '@/integrations/google/google.service';
 import { GoogleAccountService } from '../google-account/google-account.service';
+import { GoogleAccountResponseDto } from '../google-account/dto/google-account-response.dto';
 import { UserService } from '../user/user.service';
 import { formatBrazil, parseBrazilDateTime } from '@/common/helpers/brazil-date';
 import { log } from '@/common/logger';
+import type { calendar_v3 } from 'googleapis';
+
+/** Resultado da sincronização de um calendário. */
+export type CalendarSyncResult = {
+  workerId: number;
+  cancelled: number;
+  moved: number;
+  bootstrapped?: boolean;
+  resynced?: boolean;
+  error?: boolean;
+};
 
 export type DailyAvailability = {
   date: string;
@@ -60,6 +72,13 @@ const WEEKDAY_LABELS = [
 
 const SLOT_DURATION_MS = 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Janela de agendamento do cliente: ele só pode agendar de hoje até este número
+ * de dias corridos à frente. É uma janela ROLANTE — recalculada a partir de
+ * "agora" a cada chamada, então avança um dia a cada dia que passa.
+ */
+const BOOKING_WINDOW_DAYS = 60;
 
 @Injectable()
 export class AppointmentService {
@@ -257,6 +276,188 @@ export class AppointmentService {
     }
   }
 
+  // ============================================================
+  // SINCRONIZAÇÃO REVERSA: Google Calendar -> banco
+  // Cobre cancelamento (exclusão de evento) e movimentação (mudança de horário).
+  // Idempotente: alterações feitas pelo próprio sistema não causam efeito
+  // (cancelado sem agendamento correspondente / horário já igual = no-op).
+  // ============================================================
+
+  /**
+   * Sincroniza todas as contas Google conectadas. Acionado pelo cron externo
+   * (endpoint protegido) e reutilizável por um push notification futuro.
+   */
+  async syncAllCalendars(): Promise<CalendarSyncResult[]> {
+    const accounts = await this.googleAccountService.findAll();
+    const results: CalendarSyncResult[] = [];
+
+    for (const account of accounts) {
+      try {
+        results.push(await this.syncCalendarForAccount(account));
+      } catch (err) {
+        log.error(
+          'syncCalendar: falha ao sincronizar conta',
+          err instanceof Error ? err : { workerId: account.workerId, err },
+        );
+        results.push({ workerId: account.workerId, cancelled: 0, moved: 0, error: true });
+      }
+    }
+
+    return results;
+  }
+
+  private async syncCalendarForAccount(
+    account: GoogleAccountResponseDto,
+  ): Promise<CalendarSyncResult> {
+    const calendar = this.googleService.getCalendarClient(account.googleRefreshToken);
+    if (!calendar) {
+      return { workerId: account.workerId, cancelled: 0, moved: 0, error: true };
+    }
+
+    // 1º run (ou token perdido): estabelece o syncToken sem reconciliar.
+    if (!account.syncToken) {
+      const token = await this.bootstrapSyncToken(calendar, account.googleCalendarId);
+      await this.googleAccountService.updateSyncToken(account.workerId, token);
+      return { workerId: account.workerId, cancelled: 0, moved: 0, bootstrapped: true };
+    }
+
+    let cancelled = 0;
+    let moved = 0;
+    let pageToken: string | undefined;
+    let nextSyncToken: string | null | undefined;
+
+    try {
+      do {
+        const { data } = await calendar.events.list({
+          calendarId: account.googleCalendarId,
+          syncToken: account.syncToken,
+          pageToken,
+          maxResults: 250,
+        });
+
+        for (const event of data.items ?? []) {
+          const r = await this.reconcileEvent(event);
+          cancelled += r.cancelled;
+          moved += r.moved;
+        }
+
+        pageToken = data.nextPageToken ?? undefined;
+        nextSyncToken = data.nextSyncToken;
+      } while (pageToken);
+    } catch (err) {
+      // 410 Gone: syncToken expirou/invalidou -> resync completo (novo token).
+      const status = (err as { code?: number; response?: { status?: number } })?.code ??
+        (err as { response?: { status?: number } })?.response?.status;
+      if (status === 410) {
+        log.warn('syncCalendar: syncToken inválido (410), refazendo sync completo', {
+          workerId: account.workerId,
+        });
+        const token = await this.bootstrapSyncToken(calendar, account.googleCalendarId);
+        await this.googleAccountService.updateSyncToken(account.workerId, token);
+        return { workerId: account.workerId, cancelled, moved, resynced: true };
+      }
+      throw err;
+    }
+
+    if (nextSyncToken) {
+      await this.googleAccountService.updateSyncToken(account.workerId, nextSyncToken);
+    }
+
+    return { workerId: account.workerId, cancelled, moved };
+  }
+
+  /**
+   * Faz uma varredura completa (paginada) só para obter o nextSyncToken inicial.
+   * timeMin = agora: só nos interessa o que está por vir (libera/move slots futuros).
+   */
+  private async bootstrapSyncToken(
+    calendar: calendar_v3.Calendar,
+    calendarId: string,
+  ): Promise<string | null> {
+    let pageToken: string | undefined;
+    let syncToken: string | null = null;
+    const timeMin = new Date().toISOString();
+
+    do {
+      const { data } = await calendar.events.list({
+        calendarId,
+        singleEvents: true,
+        // true para que o sync incremental reporte eventos cancelados de forma confiável.
+        showDeleted: true,
+        timeMin,
+        pageToken,
+        maxResults: 250,
+      });
+      pageToken = data.nextPageToken ?? undefined;
+      syncToken = data.nextSyncToken ?? syncToken;
+    } while (pageToken);
+
+    return syncToken;
+  }
+
+  /** Reconcilia um evento alterado com o agendamento correspondente no banco. */
+  private async reconcileEvent(
+    event: calendar_v3.Schema$Event,
+  ): Promise<{ cancelled: number; moved: number }> {
+    const eventId = event.id;
+    if (!eventId) return { cancelled: 0, moved: 0 };
+
+    const appointment = await this.findByGoogleEventId(eventId);
+    // Evento sem agendamento correspondente: criado direto no Google (fora de
+    // escopo) ou já removido pelo próprio sistema. No-op (evita loop de eco).
+    if (!appointment) return { cancelled: 0, moved: 0 };
+
+    if (event.status === 'cancelled') {
+      await this.db.delete(appointments).where(eq(appointments.id, appointment.id));
+      log.info('syncCalendar: agendamento cancelado via Google Calendar', {
+        appointmentId: appointment.id,
+        eventId,
+      });
+      return { cancelled: 1, moved: 0 };
+    }
+
+    const newStart = event.start?.dateTime;
+    if (newStart) {
+      const newDate = new Date(newStart);
+      if (
+        !Number.isNaN(newDate.getTime()) &&
+        formatBrazil(newDate) !== formatBrazil(appointment.datetime)
+      ) {
+        try {
+          await this.db
+            .update(appointments)
+            .set({ datetime: newDate })
+            .where(eq(appointments.id, appointment.id));
+          log.info('syncCalendar: agendamento movido via Google Calendar', {
+            appointmentId: appointment.id,
+            eventId,
+            from: formatBrazil(appointment.datetime),
+            to: formatBrazil(newDate),
+          });
+          return { cancelled: 0, moved: 1 };
+        } catch (err) {
+          // Provável conflito com unique(worker, datetime) — ignora este evento.
+          log.warn('syncCalendar: não foi possível mover (horário já ocupado?)', {
+            appointmentId: appointment.id,
+            eventId,
+            error: err instanceof Error ? err.message : err,
+          });
+          return { cancelled: 0, moved: 0 };
+        }
+      }
+    }
+
+    return { cancelled: 0, moved: 0 };
+  }
+
+  private async findByGoogleEventId(eventId: string): Promise<AppointmentResponseDto | undefined> {
+    const [appointment] = await this.db
+      .select()
+      .from(appointments)
+      .where(eq(appointments.googleEventId, eventId));
+    return appointment;
+  }
+
   async findManyByUserId(userId: number): Promise<AppointmentResponseDto[]> {
     return await this.db.select().from(appointments).where(eq(appointments.userId, userId));
   }
@@ -301,11 +502,18 @@ export class AppointmentService {
     rangeEnd: Date,
     limit?: number,
   ): Promise<DailyAvailability[]> {
-    if (rangeEnd.getTime() <= rangeStart.getTime()) return [];
+    // Aplica a janela de agendamento rolante: o fim efetivo nunca ultrapassa
+    // "hoje + BOOKING_WINDOW_DAYS". Como todos os fluxos do cliente passam por
+    // aqui, este é o único ponto de enforcement do limite superior.
+    const { endExclusive } = this.getBookingWindow();
+    const effectiveEnd =
+      rangeEnd.getTime() > endExclusive.getTime() ? endExclusive : rangeEnd;
+
+    if (effectiveEnd.getTime() <= rangeStart.getTime()) return [];
     if (limit !== undefined && limit <= 0) return [];
 
     const dayStartOfRange = this.startOfDayBR(rangeStart);
-    const numDays = Math.ceil((rangeEnd.getTime() - dayStartOfRange.getTime()) / ONE_DAY_MS);
+    const numDays = Math.ceil((effectiveEnd.getTime() - dayStartOfRange.getTime()) / ONE_DAY_MS);
     if (numDays <= 0) return [];
 
     const [schedule] = await this.db
@@ -327,7 +535,7 @@ export class AppointmentService {
           and(
             eq(unavailablePeriods.scheduleId, schedule.id),
             gte(unavailablePeriods.end, rangeStart),
-            lt(unavailablePeriods.begin, rangeEnd),
+            lt(unavailablePeriods.begin, effectiveEnd),
           ),
         ),
       this.db
@@ -337,7 +545,7 @@ export class AppointmentService {
           and(
             eq(appointments.workerId, workerId),
             gte(appointments.datetime, rangeStart),
-            lt(appointments.datetime, rangeEnd),
+            lt(appointments.datetime, effectiveEnd),
           ),
         ),
     ]);
@@ -419,6 +627,23 @@ export class AppointmentService {
       this.startOfDayBR(rangeStart).getTime() + maxLookaheadDays * ONE_DAY_MS,
     );
     return this.getAvailableSlots(workerId, rangeStart, rangeEnd, limit);
+  }
+
+  /**
+   * Janela de agendamento permitida ao cliente: de hoje (00:00) até
+   * BOOKING_WINDOW_DAYS dias corridos à frente.
+   *
+   * - `start`: início do dia de hoje (00:00, -03:00).
+   * - `lastDay`: último dia agendável (00:00) — hoje + BOOKING_WINDOW_DAYS.
+   * - `endExclusive`: primeiro instante FORA da janela (lastDay + 1 dia).
+   *
+   * Rolante: como deriva de "agora", avança um dia a cada dia que passa.
+   */
+  getBookingWindow(now: Date = new Date()): { start: Date; lastDay: Date; endExclusive: Date } {
+    const start = this.startOfDayBR(now);
+    const lastDay = new Date(start.getTime() + BOOKING_WINDOW_DAYS * ONE_DAY_MS);
+    const endExclusive = new Date(lastDay.getTime() + ONE_DAY_MS);
+    return { start, lastDay, endExclusive };
   }
 
   private startOfDayBR(date: Date): Date {

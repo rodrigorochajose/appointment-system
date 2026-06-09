@@ -183,6 +183,8 @@ export const googleAccounts = mysqlTable('google_account', {
   googleCalendarId: varchar('google_calendar_id', { length: 255 }).notNull(),
   googleEmail: varchar('google_email', { length: 255 }).notNull().unique(),
   googleRefreshToken: longtext('google_refresh_token').notNull(),
+  /** Token de sincronização incremental do Google Calendar (events.list). */
+  syncToken: longtext('sync_token'),
   createdAt: timestamp('created_at')
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),

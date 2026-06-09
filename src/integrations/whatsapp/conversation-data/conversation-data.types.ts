@@ -9,6 +9,9 @@ export enum ConversationStep {
   FULL_MENU = 'FULL_MENU',
   FULL_MENU_REPLY = 'FULL_MENU_REPLY',
 
+  MORE_MENU = 'MORE_MENU',
+  MORE_MENU_REPLY = 'MORE_MENU_REPLY',
+
   CANCEL_MANY = 'CANCEL_MANY',
   CANCEL_CONFIRM = 'CANCEL_CONFIRM',
   CANCEL_CONFIRM_ALL = 'CANCEL_CONFIRM_ALL',
@@ -38,15 +41,27 @@ export enum SignInConfirmOption {
 }
 
 export enum FullMenuOption {
-  SCHEDULE = 'full_menu_schedule',
-  RESCHEDULE = 'full_menu_reschedule',
+  LIST = 'full_menu_list',
   CANCEL = 'full_menu_cancel',
+  MORE = 'full_menu_more',
 }
 
 export const FullMenuLabels: Record<FullMenuOption, string> = {
-  [FullMenuOption.SCHEDULE]: '📅 Agendar',
-  [FullMenuOption.RESCHEDULE]: '🔄 Remarcar',
+  [FullMenuOption.LIST]: '📋 Meus agendamentos',
   [FullMenuOption.CANCEL]: '❌ Cancelar',
+  [FullMenuOption.MORE]: '➕ Mais opções',
+};
+
+export enum MoreMenuOption {
+  RESCHEDULE = 'more_menu_reschedule',
+  SCHEDULE = 'more_menu_schedule',
+  BACK = 'more_menu_back',
+}
+
+export const MoreMenuLabels: Record<MoreMenuOption, string> = {
+  [MoreMenuOption.RESCHEDULE]: '🔄 Remarcar',
+  [MoreMenuOption.SCHEDULE]: '📅 Agendar',
+  [MoreMenuOption.BACK]: '↩️ Voltar',
 };
 
 export enum ScheduleMenuOption {

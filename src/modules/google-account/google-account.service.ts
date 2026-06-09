@@ -42,6 +42,19 @@ export class GoogleAccountService {
     return googleAccount;
   }
 
+  /** Lista todas as contas Google conectadas (usado pela sincronização). */
+  async findAll(): Promise<GoogleAccountResponseDto[]> {
+    return this.db.select().from(googleAccounts);
+  }
+
+  /** Persiste o syncToken incremental de uma conta (por workerId). */
+  async updateSyncToken(workerId: number, syncToken: string | null): Promise<void> {
+    await this.db
+      .update(googleAccounts)
+      .set({ syncToken, updatedAt: new Date() })
+      .where(eq(googleAccounts.workerId, workerId));
+  }
+
   async saveGoogleCredentials(data: { workerId: number; refreshToken: string; email: string }) {
     await this.db
       .insert(googleAccounts)
