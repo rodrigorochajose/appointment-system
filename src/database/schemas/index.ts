@@ -185,6 +185,12 @@ export const googleAccounts = mysqlTable('google_account', {
   googleRefreshToken: longtext('google_refresh_token').notNull(),
   /** Token de sincronização incremental do Google Calendar (events.list). */
   syncToken: longtext('sync_token'),
+  /** Canal de push notifications (events.watch): id gerado por nós. */
+  watchChannelId: varchar('watch_channel_id', { length: 255 }),
+  /** resourceId retornado pelo Google (necessário para parar/renovar o canal). */
+  watchResourceId: varchar('watch_resource_id', { length: 255 }),
+  /** Quando o canal de push expira (renovamos antes disso). */
+  watchExpiration: datetime('watch_expiration'),
   createdAt: timestamp('created_at')
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),

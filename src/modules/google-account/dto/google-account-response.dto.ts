@@ -5,6 +5,9 @@ export class GoogleAccountResponseDto {
   googleRefreshToken: string;
   googleEmail: string;
   syncToken: string | null;
+  watchChannelId: string | null;
+  watchResourceId: string | null;
+  watchExpiration: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

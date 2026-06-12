@@ -22,6 +22,7 @@ import { UserService } from '../user/user.service';
 import { formatBrazil, parseBrazilDateTime } from '@/common/helpers/brazil-date';
 import { log } from '@/common/logger';
 import type { calendar_v3 } from 'googleapis';
+import { randomUUID } from 'node:crypto';
 
 /** Resultado da sincronização de um calendário. */
 export type CalendarSyncResult = {
@@ -72,6 +73,11 @@ const WEEKDAY_LABELS = [
 
 const SLOT_DURATION_MS = 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+/** TTL solicitado ao criar o canal de push (Google pode reduzir). */
+const WATCH_TTL_SECONDS = 7 * 24 * 60 * 60;
+/** Renova o canal quando faltar menos que isto para expirar. */
+const WATCH_RENEW_MARGIN_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Janela de agendamento do cliente: ele só pode agendar de hoje até este número
@@ -456,6 +462,151 @@ export class AppointmentService {
       .from(appointments)
       .where(eq(appointments.googleEventId, eventId));
     return appointment;
+  }
+
+  // ============================================================
+  // PUSH NOTIFICATIONS (events.watch): Google avisa em tempo real.
+  // O canal expira em dias -> renovação periódica (cron interno).
+  // A notificação só diz "mudou algo" (corpo vazio) -> roda o sync incremental.
+  // ============================================================
+
+  /**
+   * Garante um canal de push ativo para cada conta, renovando os que estão
+   * perto de expirar (ou ausentes). Acionado pelo cron interno.
+   */
+  async ensureWatchChannels(): Promise<
+    { workerId: number; renewed?: boolean; skipped?: boolean; error?: boolean }[]
+  > {
+    const webhookUrl = process.env.GOOGLE_WEBHOOK_URL;
+    if (!webhookUrl) {
+      log.error('ensureWatchChannels: GOOGLE_WEBHOOK_URL não configurado');
+      return [];
+    }
+
+    const accounts = await this.googleAccountService.findAll();
+    const results: { workerId: number; renewed?: boolean; skipped?: boolean; error?: boolean }[] =
+      [];
+
+    for (const account of accounts) {
+      try {
+        const exp = account.watchExpiration ? new Date(account.watchExpiration).getTime() : 0;
+        const needsRenew =
+          !account.watchChannelId || !exp || exp - Date.now() < WATCH_RENEW_MARGIN_MS;
+
+        if (!needsRenew) {
+          results.push({ workerId: account.workerId, skipped: true });
+          continue;
+        }
+
+        await this.renewWatchForAccount(account, webhookUrl);
+        results.push({ workerId: account.workerId, renewed: true });
+      } catch (err) {
+        log.error(
+          'ensureWatchChannels: falha ao renovar canal',
+          err instanceof Error ? err : { workerId: account.workerId, err },
+        );
+        results.push({ workerId: account.workerId, error: true });
+      }
+    }
+
+    return results;
+  }
+
+  private async renewWatchForAccount(
+    account: GoogleAccountResponseDto,
+    webhookUrl: string,
+  ): Promise<void> {
+    const calendar = this.googleService.getCalendarClient(account.googleRefreshToken);
+    if (!calendar) throw new Error('Calendar client indisponível');
+
+    // Garante o syncToken antes de assistir, para não perder a 1ª mudança.
+    if (!account.syncToken) {
+      const token = await this.bootstrapSyncToken(calendar, account.googleCalendarId);
+      await this.googleAccountService.updateSyncToken(account.workerId, token);
+    }
+
+    // Para o canal antigo (best-effort) antes de criar o novo.
+    if (account.watchChannelId && account.watchResourceId) {
+      await this.stopChannel(calendar, account.watchChannelId, account.watchResourceId);
+    }
+
+    const channelId = randomUUID();
+    const { data } = await calendar.events.watch({
+      calendarId: account.googleCalendarId,
+      requestBody: {
+        id: channelId,
+        type: 'web_hook',
+        address: webhookUrl,
+        // Echoado de volta em X-Goog-Channel-Token; validado no webhook.
+        token: process.env.GOOGLE_SYNC_TOKEN,
+        params: { ttl: String(WATCH_TTL_SECONDS) },
+      },
+    });
+
+    const expiration = data.expiration ? new Date(Number(data.expiration)) : null;
+    await this.googleAccountService.updateWatch(account.workerId, {
+      channelId,
+      resourceId: data.resourceId ?? null,
+      expiration,
+    });
+
+    log.info('ensureWatchChannels: canal de push renovado', {
+      workerId: account.workerId,
+      channelId,
+      expiration: expiration?.toISOString(),
+    });
+  }
+
+  private async stopChannel(
+    calendar: calendar_v3.Calendar,
+    channelId: string,
+    resourceId: string,
+  ): Promise<void> {
+    try {
+      await calendar.channels.stop({ requestBody: { id: channelId, resourceId } });
+    } catch (err) {
+      log.warn('stopChannel: falha ao parar canal antigo (ignorado)', {
+        channelId,
+        error: err instanceof Error ? err.message : err,
+      });
+    }
+  }
+
+  /**
+   * Processa uma notificação de push do Google. Valida o token, ignora o ping
+   * inicial ("sync") e dispara o sync incremental da conta dona do canal.
+   * Nunca lança: o webhook deve responder 200 mesmo em caso de problema.
+   */
+  async handleNotification(opts: {
+    channelId?: string;
+    resourceState?: string;
+    token?: string;
+  }): Promise<void> {
+    const expected = process.env.GOOGLE_SYNC_TOKEN;
+    if (!expected || opts.token !== expected) {
+      log.warn('handleNotification: token do canal inválido');
+      return;
+    }
+
+    // Primeira mensagem após o watch é só um "sync" de confirmação.
+    if (opts.resourceState === 'sync') return;
+    if (!opts.channelId) return;
+
+    const account = await this.googleAccountService.findByChannelId(opts.channelId);
+    if (!account) {
+      log.warn('handleNotification: canal desconhecido', { channelId: opts.channelId });
+      return;
+    }
+
+    try {
+      const result = await this.syncCalendarForAccount(account);
+      log.info('handleNotification: sync disparado por push', { result });
+    } catch (err) {
+      log.error(
+        'handleNotification: falha no sync',
+        err instanceof Error ? err : { workerId: account.workerId, err },
+      );
+    }
   }
 
   async findManyByUserId(userId: number): Promise<AppointmentResponseDto[]> {
