@@ -90,6 +90,7 @@ export class WhatsAppMessageHandlers {
     [ConversationStep.SCHEDULE_CHECK_AVAILABILITY]: (h) => this.handleScheduleCheckAvailability(h),
     [ConversationStep.SCHEDULE_CONFIRM]: (h) => this.handleScheduleConfirm(h),
     [ConversationStep.SCHEDULE_CONFIRMED]: (h) => this.handleScheduleConfirmed(h),
+    [ConversationStep.WORKER_MENU]: (h) => this.handleWorkerMenu(h),
     [ConversationStep.CLOSE]: (h) => this.handleClose(h),
   };
 
@@ -947,6 +948,28 @@ export class WhatsAppMessageHandlers {
     );
 
     handler.setState(handler.data.from, { step: ConversationStep.CLOSE, data: null });
+  }
+
+  /**
+   * Ponto de entrada do barbeiro. Placeholder: por enquanto só saúda o
+   * profissional. O menu personalizado do worker será construído aqui.
+   */
+  async handleWorkerMenu(handler: MessageHandlerPayload): Promise<void> {
+    log.debug('handleWorkerMenu', {
+      from: handler.data.from,
+      workerId: handler.conversationData.workerId,
+    });
+
+    const userId = handler.conversationData.userId;
+    const name = userId ? ((await this.userService.getNameById(userId)) ?? '') : '';
+
+    await handler.sendMessage(
+      'text',
+      `💈 Olá${name ? `, ${name}` : ''}! Identifiquei que você é o barbeiro.\n\nSeu menu de atendimento está sendo preparado. Em breve você terá as opções por aqui. 🛠️`,
+    );
+
+    // Mantém o estado no menu do worker para a próxima interação.
+    handler.setState(handler.data.from, { step: ConversationStep.WORKER_MENU, data: null });
   }
 
   async handleClose(handler: MessageHandlerPayload): Promise<void> {

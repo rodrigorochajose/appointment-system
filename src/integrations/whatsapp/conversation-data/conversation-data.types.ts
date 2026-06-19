@@ -32,8 +32,14 @@ export enum ConversationStep {
   SCHEDULE_CONFIRM = 'SCHEDULE_CONFIRM',
   SCHEDULE_CONFIRMED = 'SCHEDULE_CONFIRMED',
 
+  // Fluxo do barbeiro (worker)
+  WORKER_MENU = 'WORKER_MENU',
+
   CLOSE = 'CLOSE',
 }
+
+/** Papel da identidade que está conversando pelo WhatsApp. */
+export type ConversationRole = 'user' | 'worker';
 
 export enum SignInConfirmOption {
   CONFIRM = 'sign_in_confirm',
@@ -111,6 +117,10 @@ export interface ConversationData {
   step: ConversationStep;
   data: string | null;
   userId: number | null;
+  /** Papel desta identidade: cliente ('user') ou barbeiro ('worker'). */
+  role: ConversationRole;
+  /** Quando role === 'worker', id do profissional vinculado (user.workerId). */
+  workerId: number | null;
   /** Contexto de fluxo (JSON) que sobrevive entre steps, ex.: remarcação em andamento. */
   context: string | null;
 }

@@ -25,6 +25,7 @@ export class UserService {
           name: users.name,
           email: users.email,
           phone: users.phone,
+          workerId: users.workerId,
           createdAt: users.createdAt,
           updatedAt: users.updatedAt,
         })

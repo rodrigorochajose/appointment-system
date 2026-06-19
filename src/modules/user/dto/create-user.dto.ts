@@ -1,4 +1,4 @@
-import { IsEmail, IsPhoneNumber, IsString } from 'class-validator';
+import { IsEmail, IsInt, IsOptional, IsPhoneNumber, IsString } from 'class-validator';
 
 export class CreateUserDto {
   @IsString()
@@ -9,4 +9,9 @@ export class CreateUserDto {
 
   @IsPhoneNumber('BR')
   phone: string;
+
+  /** Vincula esta identidade a um profissional, tornando-a um barbeiro. */
+  @IsOptional()
+  @IsInt()
+  workerId?: number;
 }

@@ -43,4 +43,5 @@ lerna-debug.log*
 mysql_data/
 
 secret-integration-calendar.json
-annotations.txt
+
+/docs

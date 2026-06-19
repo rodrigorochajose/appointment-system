@@ -1,44 +1,50 @@
 import type { ConnectionOptions } from 'mysql2/promise';
 
+/** Ambientes de banco suportados, cada um com sua própria connection string. */
+export type DbEnv = 'dev' | 'prod';
+
+/** Porta MySQL padrão, usada quando a URL não especifica uma. */
+const DEFAULT_PORT = 3306;
+
+type SslConfig = { minVersion: 'TLSv1.2'; rejectUnauthorized: true } | undefined;
+
 /**
- * Monta as credenciais de conexão MySQL a partir do ambiente.
- *
- * Aceita duas formas:
- *  - DATABASE_URL (ex.: mysql://user:pass@host:4000/dbname) — usado por provedores
- *    cloud como TiDB Cloud, Aiven, Railway etc.
- *  - Variáveis discretas: DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME
- *
- * SSL é ativado automaticamente quando DB_SSL=true (obrigatório no TiDB Cloud)
- * ou quando a URL contém sslaccept/ssl.
+ * SSL é ativado quando a connection string contém sslaccept/sslmode/ssl
+ * (TiDB Cloud e a maioria dos provedores cloud exigem). O dev local fica sem TLS.
  */
-export function getDbCredentials(): ConnectionOptions {
-  const url = process.env.DATABASE_URL;
-  const sslEnabled =
-    process.env.DB_SSL === 'true' ||
-    (!!url && /ssl(accept|mode)?=/i.test(url));
+function resolveSsl(url: string): SslConfig {
+  const enabled = /ssl(accept|mode)?=/i.test(url);
+  return enabled ? { minVersion: 'TLSv1.2', rejectUnauthorized: true } : undefined;
+}
 
-  const ssl = sslEnabled
-    ? { minVersion: 'TLSv1.2' as const, rejectUnauthorized: true }
-    : undefined;
+/** Variável de ambiente que guarda a connection string de cada ambiente. */
+const URL_VAR: Record<DbEnv, string> = {
+  dev: 'DATABASE_URL_DEV',
+  prod: 'DATABASE_URL_PROD',
+};
 
-  if (url) {
-    const parsed = new URL(url);
-    return {
-      host: parsed.hostname,
-      port: parsed.port ? Number(parsed.port) : 3306,
-      user: decodeURIComponent(parsed.username),
-      password: decodeURIComponent(parsed.password),
-      database: parsed.pathname.replace(/^\//, ''),
-      ssl,
-    };
+/**
+ * Monta as credenciais de conexão MySQL para o ambiente informado, lendo a
+ * connection string correspondente (`DATABASE_URL_DEV` ou `DATABASE_URL_PROD`).
+ *
+ * O ambiente é sempre explícito — quem chama (o script de migration ou o módulo
+ * de banco) decide qual usar; aqui não há dependência de NODE_ENV.
+ */
+export function getDbCredentials(env: DbEnv): ConnectionOptions {
+  const varName = URL_VAR[env];
+  const url = process.env[varName];
+
+  if (!url) {
+    throw new Error(`${varName} não definida no .env — necessária para conectar ao ambiente "${env}".`);
   }
 
+  const parsed = new URL(url);
   return {
-    host: process.env.DB_HOST || 'localhost',
-    port: Number(process.env.DB_PORT) || 3306,
-    user: process.env.DB_USER || 'appointment',
-    password: process.env.DB_PASSWORD || 'appoint123',
-    database: process.env.DB_NAME || 'appointmentdb',
-    ssl,
+    host: parsed.hostname,
+    port: parsed.port ? Number(parsed.port) : DEFAULT_PORT,
+    user: decodeURIComponent(parsed.username),
+    password: decodeURIComponent(parsed.password),
+    database: parsed.pathname.replace(/^\//, ''),
+    ssl: resolveSsl(url),
   };
 }

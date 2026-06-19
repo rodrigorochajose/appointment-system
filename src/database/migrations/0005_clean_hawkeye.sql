@@ -1,0 +1,2 @@
+ALTER TABLE `user` ADD `worker_id` int;--> statement-breakpoint
+ALTER TABLE `user` ADD CONSTRAINT `user_worker_id_worker_id_fk` FOREIGN KEY (`worker_id`) REFERENCES `worker`(`id`) ON DELETE set null ON UPDATE no action;

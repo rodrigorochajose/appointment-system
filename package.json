@@ -16,7 +16,9 @@
     "db:generate": "drizzle-kit generate:mysql",
     "db:push": "drizzle-kit push:mysql",
     "db:studio": "drizzle-kit studio",
-    "db:migrate": "tsx src/database/migrate.ts"
+    "db:migrate": "tsx src/database/migrate.ts",
+    "db:migrate:dev": "tsx src/database/migrate.ts dev",
+    "db:migrate:prod": "tsx src/database/migrate.ts prod"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",

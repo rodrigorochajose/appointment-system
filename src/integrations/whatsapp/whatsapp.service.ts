@@ -93,6 +93,20 @@ export class WhatsAppService {
         step: ConversationStep.SIGN_IN,
         data: null,
         userId: null,
+        role: 'user',
+        workerId: null,
+      });
+      return this.conversationData.getState(data.from);
+    }
+
+    // Barbeiro: identidade (telefone) vinculada a um profissional → menu do worker.
+    if (user.workerId) {
+      this.conversationData.setState(data.from, {
+        step: ConversationStep.WORKER_MENU,
+        data: null,
+        userId: user.id,
+        role: 'worker',
+        workerId: user.workerId,
       });
       return this.conversationData.getState(data.from);
     }
@@ -114,6 +128,8 @@ export class WhatsAppService {
       step: userStep,
       data: null,
       userId: user.id,
+      role: 'user',
+      workerId: null,
     });
 
     return this.conversationData.getState(data.from);

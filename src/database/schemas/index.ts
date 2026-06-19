@@ -21,6 +21,11 @@ export const users = mysqlTable('user', {
   name: varchar('name', { length: 255 }).notNull(),
   email: varchar('email', { length: 255 }).notNull().unique(),
   phone: varchar('phone', { length: 20 }).notNull().unique(),
+  /**
+   * Vínculo opcional com um profissional. Quando preenchido, esta identidade
+   * (telefone) é um barbeiro e fala com o sistema pelo menu do worker.
+   */
+  workerId: int('worker_id').references(() => workers.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at')
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),
@@ -206,8 +211,12 @@ export type NewGoogleAccount = typeof googleAccounts.$inferInsert;
 // RELAÇÕES (Relations)
 // ============================================
 
-export const usersRelations = relations(users, ({ many }) => ({
+export const usersRelations = relations(users, ({ one, many }) => ({
   appointments: many(appointments),
+  worker: one(workers, {
+    fields: [users.workerId],
+    references: [workers.id],
+  }),
 }));
 
 export const workersRelations = relations(workers, ({ one }) => ({
