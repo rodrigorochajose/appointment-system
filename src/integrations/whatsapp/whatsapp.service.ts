@@ -5,7 +5,7 @@ import type {
   IncomingMessageParsed,
 } from './dto/whatsapp-webhook.dto';
 import { UserService } from 'src/modules/user/user.service';
-import { ConversationStep, ConversationData } from './conversation-data';
+import { ConversationStep, ConversationData, ListConfig } from './conversation-data';
 import { log } from '@/common/logger';
 import { AppointmentService } from '@/modules/appointment/appointment.service';
 import { ConversationDataService } from './conversation-data/conversation-data.service';
@@ -157,8 +157,16 @@ export class WhatsAppService {
       conversationData,
       setState: (userKey, newState) => this.conversationData.setState(userKey, newState),
       resetState: (userKey) => this.conversationData.resetState(userKey),
-      sendMessage: (type, text, options) =>
-        this.buildMessageBodyAndSend(data.phoneNumberId, data.from, type, text, options ?? []),
+      sendMessage: (type, text, options, listConfig) =>
+        this.buildMessageBodyAndSend(
+          data.phoneNumberId,
+          data.from,
+          type,
+          text,
+          options ?? [],
+          false,
+          listConfig,
+        ),
       callHandler: (nextStep) => this.executeHandler(nextStep, data),
     });
   }
@@ -197,6 +205,7 @@ export class WhatsAppService {
     text: string,
     options: Array<{ id: string; title: string }>,
     previewUrl = false,
+    listConfig?: ListConfig,
   ) {
     const normalizedTo = to.replace(/\D/g, '');
 
@@ -247,16 +256,16 @@ export class WhatsAppService {
             },
             header: {
               type: 'text',
-              text: 'Escolha um horário',
+              text: listConfig?.header ?? 'Escolha um horário',
             },
             footer: {
               text: '',
             },
             action: {
-              button: 'Visualizar horários',
+              button: listConfig?.button ?? 'Visualizar horários',
               sections: [
                 {
-                  title: 'Horários disponíveis',
+                  title: listConfig?.sectionTitle ?? 'Horários disponíveis',
                   rows: options.map((option) => ({
                     id: option.id,
                     title: option.title,
@@ -279,8 +288,9 @@ export class WhatsAppService {
     text: string,
     options: Array<{ id: string; title: string }>,
     previewUrl = false,
+    listConfig?: ListConfig,
   ): Promise<void> {
-    const body = this.buildMessageBody(to, type, text, options, previewUrl);
+    const body = this.buildMessageBody(to, type, text, options, previewUrl, listConfig);
     await this.sendMessage(phoneNumberId, body);
   }
 }

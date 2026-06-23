@@ -1,7 +1,7 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DATABASE_CONNECTION } from 'src/database/database.module';
 import { MySql2Database } from 'drizzle-orm/mysql2';
-import { and, eq, gte, lt } from 'drizzle-orm';
+import { and, eq, gte, isNotNull, lt } from 'drizzle-orm';
 import {
   appointments,
   schedules,
@@ -621,6 +621,247 @@ export class AppointmentService {
     }
 
     return appointment;
+  }
+
+  /**
+   * Agendamentos de um profissional que SOBREPÕEM o intervalo [begin, end).
+   * Como cada agendamento dura SLOT_DURATION_MS, um agendamento que começa até
+   * uma duração antes de `begin` ainda pode invadir o intervalo. Buscamos a
+   * partir de `begin - duração` e filtramos pelo overlap real.
+   * Usado para detectar conflitos ao indisponibilizar um horário.
+   */
+  async findManyByWorkerOverlapping(
+    workerId: number,
+    begin: Date,
+    end: Date,
+  ): Promise<AppointmentResponseDto[]> {
+    const lower = new Date(begin.getTime() - SLOT_DURATION_MS);
+    const rows = await this.db
+      .select()
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.workerId, workerId),
+          gte(appointments.datetime, lower),
+          lt(appointments.datetime, end),
+        ),
+      );
+
+    return rows.filter((apt) => apt.datetime.getTime() + SLOT_DURATION_MS > begin.getTime());
+  }
+
+  // ============================================================
+  // FIXAR CLIENTE (séries recorrentes semanais materializadas)
+  // ============================================================
+
+  /**
+   * Materializa uma série semanal a partir de `firstOccurrence`, criando uma
+   * linha por semana até a borda da janela de agendamento (cada uma com seu
+   * evento no Google Calendar). Se já houver um agendamento do MESMO cliente no
+   * horário, ele é incorporado à série; se for de outro cliente, a semana é pulada.
+   */
+  async createFixedSeries(
+    workerId: number,
+    userId: number,
+    firstOccurrence: Date,
+  ): Promise<{ seriesId: string; created: number; merged: number; skipped: number }> {
+    const seriesId = randomUUID();
+    const { endExclusive } = this.getBookingWindow();
+    const now = Date.now();
+    let created = 0;
+    let merged = 0;
+    let skipped = 0;
+
+    for (
+      let occ = new Date(firstOccurrence);
+      occ.getTime() < endExclusive.getTime();
+      occ = new Date(occ.getTime() + ONE_DAY_MS * 7)
+    ) {
+      if (occ.getTime() <= now) continue;
+
+      const [existing] = await this.db
+        .select()
+        .from(appointments)
+        .where(and(eq(appointments.workerId, workerId), eq(appointments.datetime, occ)));
+
+      if (existing) {
+        if (existing.userId === userId) {
+          await this.db
+            .update(appointments)
+            .set({ fixed: true, seriesId })
+            .where(eq(appointments.id, existing.id));
+          merged++;
+        } else {
+          skipped++;
+        }
+        continue;
+      }
+
+      try {
+        await this.createSeriesOccurrence(workerId, userId, occ, seriesId);
+        created++;
+      } catch (error) {
+        log.warn('createFixedSeries: falha ao materializar ocorrência', {
+          workerId,
+          userId,
+          occ: occ.toISOString(),
+          error: error instanceof Error ? error.message : error,
+        });
+        skipped++;
+      }
+    }
+
+    return { seriesId, created, merged, skipped };
+  }
+
+  /**
+   * Cria uma única ocorrência da série. A linha é criada primeiro; o evento no
+   * Google é best-effort — se falhar (ex.: sem conta Google), o agendamento é
+   * mantido mesmo assim (diferente do `create()` avulso, que é tudo-ou-nada).
+   */
+  private async createSeriesOccurrence(
+    workerId: number,
+    userId: number,
+    occ: Date,
+    seriesId: string,
+  ): Promise<void> {
+    const [result] = await this.db.insert(appointments).values({
+      userId,
+      workerId,
+      offeringId: 1,
+      fixed: true,
+      seriesId,
+      datetime: occ,
+    });
+
+    try {
+      const eventId = await this.createGoogleEvent(workerId, userId, formatBrazil(occ));
+      if (eventId) {
+        await this.db
+          .update(appointments)
+          .set({ googleEventId: eventId })
+          .where(eq(appointments.id, result.insertId));
+      }
+    } catch (error) {
+      log.warn('createSeriesOccurrence: evento Google falhou (agendamento mantido)', {
+        workerId,
+        userId,
+        occ: occ.toISOString(),
+        error: error instanceof Error ? error.message : error,
+      });
+    }
+  }
+
+  /** Séries ativas (com ocorrências futuras) de um cliente, com a próxima data de cada. */
+  async findActiveSeriesByUser(userId: number): Promise<{ seriesId: string; next: Date }[]> {
+    const now = new Date();
+    const rows = await this.db
+      .select()
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.userId, userId),
+          isNotNull(appointments.seriesId),
+          gte(appointments.datetime, now),
+        ),
+      );
+
+    const earliest = new Map<string, Date>();
+    for (const row of rows) {
+      if (!row.seriesId) continue;
+      const cur = earliest.get(row.seriesId);
+      if (!cur || row.datetime < cur) earliest.set(row.seriesId, row.datetime);
+    }
+    return [...earliest.entries()].map(([seriesId, next]) => ({ seriesId, next }));
+  }
+
+  /**
+   * "Desfixa" uma série: remove as ocorrências FUTURAS (banco + eventos Google)
+   * e desvincula as PASSADAS (limpa series_id/fixed) para que continuem como
+   * histórico — e para que o cron não ressuscite a série a partir delas.
+   * Retorna quantas ocorrências futuras foram canceladas.
+   */
+  async cancelSeriesFromNow(seriesId: string): Promise<number> {
+    const now = new Date();
+    const future = await this.db
+      .select()
+      .from(appointments)
+      .where(and(eq(appointments.seriesId, seriesId), gte(appointments.datetime, now)));
+
+    for (const row of future) {
+      if (row.googleEventId && row.workerId) {
+        await this.deleteGoogleEvent(row.workerId, row.googleEventId);
+      }
+    }
+
+    // Atômico: remove as futuras e desvincula as passadas de uma vez, para que o
+    // cron de extensão nunca veja a série "meio cancelada" e a ressuscite.
+    await this.db.transaction(async (tx) => {
+      await tx
+        .delete(appointments)
+        .where(and(eq(appointments.seriesId, seriesId), gte(appointments.datetime, now)));
+
+      await tx
+        .update(appointments)
+        .set({ seriesId: null, fixed: false })
+        .where(and(eq(appointments.seriesId, seriesId), lt(appointments.datetime, now)));
+    });
+
+    return future.length;
+  }
+
+  /**
+   * Estende todas as séries ativas até a borda da janela rolante (chamado pelo cron).
+   * Para cada série, parte da última ocorrência e cria as semanas que faltam.
+   */
+  async extendFixedSeries(): Promise<{ seriesId: string; created: number }[]> {
+    const { endExclusive } = this.getBookingWindow();
+    const rows = await this.db
+      .select()
+      .from(appointments)
+      .where(isNotNull(appointments.seriesId));
+
+    const series = new Map<string, { userId: number; workerId: number; last: Date }>();
+    for (const row of rows) {
+      if (!row.seriesId || !row.workerId) continue;
+      const cur = series.get(row.seriesId);
+      if (!cur || row.datetime > cur.last) {
+        series.set(row.seriesId, { userId: row.userId, workerId: row.workerId, last: row.datetime });
+      }
+    }
+
+    const now = Date.now();
+    const results: { seriesId: string; created: number }[] = [];
+    for (const [seriesId, info] of series) {
+      let created = 0;
+      for (
+        let occ = new Date(info.last.getTime() + ONE_DAY_MS * 7);
+        occ.getTime() < endExclusive.getTime();
+        occ = new Date(occ.getTime() + ONE_DAY_MS * 7)
+      ) {
+        if (occ.getTime() <= now) continue;
+
+        const [existing] = await this.db
+          .select()
+          .from(appointments)
+          .where(and(eq(appointments.workerId, info.workerId), eq(appointments.datetime, occ)));
+        if (existing) continue;
+
+        try {
+          await this.createSeriesOccurrence(info.workerId, info.userId, occ, seriesId);
+          created++;
+        } catch (error) {
+          log.warn('extendFixedSeries: falha ao estender série', {
+            seriesId,
+            occ: occ.toISOString(),
+            error: error instanceof Error ? error.message : error,
+          });
+        }
+      }
+      if (created > 0) results.push({ seriesId, created });
+    }
+
+    return results;
   }
 
   async update(id: number, data: UpdateAppointmentDto): Promise<AppointmentResponseDto> {

@@ -1,0 +1,1 @@
+ALTER TABLE `appointment` ADD `series_id` varchar(255);

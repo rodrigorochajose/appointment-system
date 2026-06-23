@@ -1,7 +1,7 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DATABASE_CONNECTION } from 'src/database/database.module';
 import { MySql2Database } from 'drizzle-orm/mysql2';
-import { eq } from 'drizzle-orm';
+import { eq, like } from 'drizzle-orm';
 import { users } from 'src/database/schemas';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -61,6 +61,21 @@ export class UserService {
     const [user] = await this.db.select().from(users).where(eq(users.phone, phone));
 
     return user;
+  }
+
+  /**
+   * Busca clientes cujo nome contém o termo (case-insensitive no MySQL).
+   * Usado pelo menu do barbeiro para localizar o cliente por nome aproximado.
+   */
+  async findByNameLike(name: string, limit = 25): Promise<UserResponseDto[]> {
+    const term = name.trim();
+    if (!term) return [];
+
+    return await this.db
+      .select()
+      .from(users)
+      .where(like(users.name, `%${term}%`))
+      .limit(limit);
   }
 
   async update(id: number, data: UpdateUserDto): Promise<UserResponseDto> {

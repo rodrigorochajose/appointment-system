@@ -139,6 +139,11 @@ export const appointments = mysqlTable(
       .notNull()
       .references(() => offerings.id, { onDelete: 'restrict' }),
     fixed: boolean('fixed').notNull(),
+    /**
+     * Agrupa as ocorrências de uma "fixação" (cliente recorrente semanal).
+     * Mesmo valor (UUID) em todas as linhas da série; null em agendamentos avulsos.
+     */
+    seriesId: varchar('series_id', { length: 255 }),
     datetime: datetime('datetime').notNull(),
     googleEventId: varchar('google_event_id', { length: 255 }),
     createdAt: timestamp('created_at')
