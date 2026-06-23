@@ -30,4 +30,4 @@ COPY package*.json ./
 EXPOSE 3000
 
 # Roda as migrations e sobe a API
-CMD ["sh", "-c", "node dist/src/database/migrate.js && node dist/src/main"]
+CMD ["sh", "-c", "node dist/src/database/migrate.js prod && node dist/src/main"]
