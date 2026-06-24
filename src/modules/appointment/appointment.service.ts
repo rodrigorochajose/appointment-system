@@ -1,7 +1,7 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DATABASE_CONNECTION } from 'src/database/database.module';
 import { MySql2Database } from 'drizzle-orm/mysql2';
-import { and, eq, gte, isNotNull, lt } from 'drizzle-orm';
+import { and, asc, eq, gte, isNotNull, lt } from 'drizzle-orm';
 import {
   appointments,
   schedules,
@@ -650,6 +650,47 @@ export class AppointmentService {
     return rows.filter((apt) => apt.datetime.getTime() + SLOT_DURATION_MS > begin.getTime());
   }
 
+  /** Agendamentos de um profissional num dia (00:00–24:00 do `dayStart`). */
+  async findManyByWorkerOnDay(workerId: number, dayStart: Date): Promise<AppointmentResponseDto[]> {
+    const dayEnd = new Date(dayStart.getTime() + ONE_DAY_MS);
+    return await this.db
+      .select()
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.workerId, workerId),
+          gte(appointments.datetime, dayStart),
+          lt(appointments.datetime, dayEnd),
+        ),
+      );
+  }
+
+  /**
+   * Resumo para o menu do barbeiro: quantos agendamentos ainda vão acontecer
+   * hoje e qual é o próximo agendamento futuro (com o cliente).
+   */
+  async getWorkerDaySummary(
+    workerId: number,
+  ): Promise<{ remainingToday: number; next: { datetime: Date; userId: number } | null }> {
+    const now = new Date();
+    const todayStart = parseBrazilDateTime(`${formatBrazil(now).slice(0, 10)}T00:00:00`);
+
+    const todays = await this.findManyByWorkerOnDay(workerId, todayStart);
+    const remainingToday = todays.filter((apt) => apt.datetime.getTime() > now.getTime()).length;
+
+    const [next] = await this.db
+      .select()
+      .from(appointments)
+      .where(and(eq(appointments.workerId, workerId), gte(appointments.datetime, now)))
+      .orderBy(asc(appointments.datetime))
+      .limit(1);
+
+    return {
+      remainingToday,
+      next: next ? { datetime: next.datetime, userId: next.userId } : null,
+    };
+  }
+
   // ============================================================
   // FIXAR CLIENTE (séries recorrentes semanais materializadas)
   // ============================================================
@@ -679,10 +720,19 @@ export class AppointmentService {
     ) {
       if (occ.getTime() <= now) continue;
 
+      // Procura por uma janela de 1 minuto para tolerar diferenças de
+      // segundos/precisão entre o instante calculado e o valor persistido.
+      const slotEnd = new Date(occ.getTime() + 60 * 1000);
       const [existing] = await this.db
         .select()
         .from(appointments)
-        .where(and(eq(appointments.workerId, workerId), eq(appointments.datetime, occ)));
+        .where(
+          and(
+            eq(appointments.workerId, workerId),
+            gte(appointments.datetime, occ),
+            lt(appointments.datetime, slotEnd),
+          ),
+        );
 
       if (existing) {
         if (existing.userId === userId) {
@@ -701,13 +751,33 @@ export class AppointmentService {
         await this.createSeriesOccurrence(workerId, userId, occ, seriesId);
         created++;
       } catch (error) {
-        log.warn('createFixedSeries: falha ao materializar ocorrência', {
-          workerId,
-          userId,
-          occ: occ.toISOString(),
-          error: error instanceof Error ? error.message : error,
-        });
-        skipped++;
+        // Corrida com a unique (worker_id, datetime): outra linha ocupou o slot
+        // entre a checagem e o insert. Reavalia para mesclar (mesmo cliente) ou pular.
+        const [conflict] = await this.db
+          .select()
+          .from(appointments)
+          .where(
+            and(
+              eq(appointments.workerId, workerId),
+              gte(appointments.datetime, occ),
+              lt(appointments.datetime, slotEnd),
+            ),
+          );
+        if (conflict && conflict.userId === userId) {
+          await this.db
+            .update(appointments)
+            .set({ fixed: true, seriesId })
+            .where(eq(appointments.id, conflict.id));
+          merged++;
+        } else {
+          log.warn('createFixedSeries: falha ao materializar ocorrência', {
+            workerId,
+            userId,
+            occ: occ.toISOString(),
+            error: error instanceof Error ? error.message : error,
+          });
+          skipped++;
+        }
       }
     }
 

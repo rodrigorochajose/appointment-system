@@ -32,6 +32,11 @@ export enum ConversationStep {
   SCHEDULE_CONFIRM = 'SCHEDULE_CONFIRM',
   SCHEDULE_CONFIRMED = 'SCHEDULE_CONFIRMED',
 
+  // Entrada direta de dia/horário pelo barbeiro (agendar/remarcar)
+  WORKER_SCHEDULE_INPUT = 'WORKER_SCHEDULE_INPUT',
+  // Busca digitada de agendamento (dia/horário ou nome) p/ cancelar/remarcar
+  WORKER_APPT_SEARCH = 'WORKER_APPT_SEARCH',
+
   // Fluxo do barbeiro (worker)
   WORKER_MENU = 'WORKER_MENU',
   WORKER_MENU_REPLY = 'WORKER_MENU_REPLY',
@@ -66,8 +71,6 @@ export enum ConversationStep {
   // Indisponibilizar horário
   WORKER_UNAVAIL_DAY = 'WORKER_UNAVAIL_DAY',
   WORKER_UNAVAIL_DAY_INPUT = 'WORKER_UNAVAIL_DAY_INPUT',
-  WORKER_UNAVAIL_SCOPE = 'WORKER_UNAVAIL_SCOPE',
-  WORKER_UNAVAIL_HOURS = 'WORKER_UNAVAIL_HOURS',
   WORKER_UNAVAIL_CONFLICTS = 'WORKER_UNAVAIL_CONFLICTS',
 
   // Horário de funcionamento
@@ -181,18 +184,6 @@ export const ClientUpdateFieldLabels: Record<ClientUpdateFieldOption, string> = 
   [ClientUpdateFieldOption.BACK]: '↩️ Voltar',
 };
 
-export enum UnavailableScopeOption {
-  ALL_DAY = 'unavail_all_day',
-  HOURS = 'unavail_hours',
-  BACK = 'unavail_back',
-}
-
-export const UnavailableScopeLabels: Record<UnavailableScopeOption, string> = {
-  [UnavailableScopeOption.ALL_DAY]: '📅 Dia todo',
-  [UnavailableScopeOption.HOURS]: '⏰ Específico',
-  [UnavailableScopeOption.BACK]: '↩️ Voltar',
-};
-
 /** Id da linha "Voltar" injetada na lista de resultados de busca de cliente. */
 export const WORKER_SEARCH_BACK_ID = 'worker_search_back';
 
@@ -281,6 +272,8 @@ export interface RescheduleContext {
   mode: 'reschedule';
   appointmentId: number;
   oldIso: string;
+  /** Cliente-alvo quando a remarcação é feita pelo barbeiro (preserva o alvo). */
+  targetUserId?: number;
 }
 
 export const ScheduleMenuLabels: Record<ScheduleMenuOption, string> = {

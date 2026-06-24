@@ -1,7 +1,7 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DATABASE_CONNECTION } from 'src/database/database.module';
 import { MySql2Database } from 'drizzle-orm/mysql2';
-import { eq, like } from 'drizzle-orm';
+import { and, eq, like } from 'drizzle-orm';
 import { users } from 'src/database/schemas';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -64,17 +64,19 @@ export class UserService {
   }
 
   /**
-   * Busca clientes cujo nome contém o termo (case-insensitive no MySQL).
-   * Usado pelo menu do barbeiro para localizar o cliente por nome aproximado.
+   * Busca clientes por nome aproximado (case-insensitive no MySQL).
+   * O termo é quebrado em palavras e cada uma precisa aparecer no nome (AND),
+   * então "joao silva" casa "João da Silva" independentemente da ordem das
+   * palavras intermediárias.
    */
   async findByNameLike(name: string, limit = 25): Promise<UserResponseDto[]> {
-    const term = name.trim();
-    if (!term) return [];
+    const tokens = name.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return [];
 
     return await this.db
       .select()
       .from(users)
-      .where(like(users.name, `%${term}%`))
+      .where(and(...tokens.map((t) => like(users.name, `%${t}%`))))
       .limit(limit);
   }
 
