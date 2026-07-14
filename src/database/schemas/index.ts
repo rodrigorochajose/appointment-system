@@ -139,11 +139,17 @@ export const appointments = mysqlTable(
       .notNull()
       .references(() => offerings.id, { onDelete: 'restrict' }),
     fixed: boolean('fixed').notNull(),
-    /**
-     * Agrupa as ocorrências de uma "fixação" (cliente recorrente semanal).
-     * Mesmo valor (UUID) em todas as linhas da série; null em agendamentos avulsos.
-     */
+    /** @deprecated Substituída por `fixedSeriesId`. Mantida só para não dropar dados legados. */
     seriesId: varchar('series_id', { length: 255 }),
+    /**
+     * Vínculo com a "fixação" (cliente recorrente semanal) quando esta linha é a
+     * MATERIALIZAÇÃO de uma ocorrência específica — ex.: uma semana que foi
+     * remarcada/desviada da regra. As ocorrências não-desviadas NÃO viram linha:
+     * são projetadas virtualmente a partir de `fixed_series`. Null em avulsos.
+     */
+    fixedSeriesId: int('fixed_series_id').references(() => fixedSeries.id, {
+      onDelete: 'set null',
+    }),
     datetime: datetime('datetime').notNull(),
     googleEventId: varchar('google_event_id', { length: 255 }),
     createdAt: timestamp('created_at')
@@ -160,6 +166,74 @@ export const appointments = mysqlTable(
 
 export type Appointment = typeof appointments.$inferSelect;
 export type NewAppointment = typeof appointments.$inferInsert;
+
+// ============================================
+// SCHEMA: FIXED SERIES (Clientes fixos / recorrência semanal)
+// ============================================
+
+/**
+ * A REGRA de uma fixação semanal. Uma linha por cliente fixo. As ocorrências
+ * não são materializadas: são projetadas em tempo de leitura a partir daqui
+ * (dia da semana + horário, de `startDate` em diante). Assim não há cron para
+ * "estender" a série nem janela rolante — a projeção cobre qualquer intervalo.
+ */
+export const fixedSeries = mysqlTable('fixed_series', {
+  id: int('id').primaryKey().autoincrement(),
+  workerId: int('worker_id')
+    .notNull()
+    .references(() => workers.id, { onDelete: 'cascade' }),
+  userId: int('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  offeringId: int('offering_id')
+    .notNull()
+    .references(() => offerings.id, { onDelete: 'restrict' }),
+  /** Dia da semana (0=domingo … 6=sábado), no fuso America/Sao_Paulo. */
+  weekday: int('weekday').notNull(),
+  /** Horário de início no formato "HH:mm". */
+  time: varchar('time', { length: 5 }).notNull(),
+  /** Data (00:00 -03:00) da primeira ocorrência; projeção não vai antes disto. */
+  startDate: datetime('start_date').notNull(),
+  /** Série ativa; ao "desfixar", vira false e deixa de ser projetada. */
+  active: boolean('active').notNull().default(true),
+  /** Evento recorrente (RRULE WEEKLY) espelhado no Google Calendar, se houver. */
+  googleEventId: varchar('google_event_id', { length: 255 }),
+  createdAt: timestamp('created_at')
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: timestamp('updated_at')
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`),
+});
+
+export type FixedSeries = typeof fixedSeries.$inferSelect;
+export type NewFixedSeries = typeof fixedSeries.$inferInsert;
+
+/**
+ * Exceção de uma série: uma data cuja ocorrência NÃO deve ser projetada porque
+ * foi cancelada ou remarcada naquela semana. Presença de (série, data) = "pule
+ * esta ocorrência". Remarcação também cria uma linha real em `appointment`.
+ */
+export const fixedSeriesExceptions = mysqlTable(
+  'fixed_series_exception',
+  {
+    id: int('id').primaryKey().autoincrement(),
+    seriesId: int('series_id')
+      .notNull()
+      .references(() => fixedSeries.id, { onDelete: 'cascade' }),
+    /** Data (00:00 -03:00) da ocorrência pulada. */
+    date: datetime('date').notNull(),
+    createdAt: timestamp('created_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => ({
+    seriesDateIdx: unique('series_date_idx').on(table.seriesId, table.date),
+  }),
+);
+
+export type FixedSeriesException = typeof fixedSeriesExceptions.$inferSelect;
+export type NewFixedSeriesException = typeof fixedSeriesExceptions.$inferInsert;
 
 // ============================================
 // SCHEMA: WORKING HOURS (Jornada de Trabalho)

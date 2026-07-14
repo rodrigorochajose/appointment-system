@@ -270,10 +270,16 @@ export enum ScheduleMenuOption {
 /** Contexto de fluxo carregado entre steps enquanto o cliente remarca. */
 export interface RescheduleContext {
   mode: 'reschedule';
+  /** Id do agendamento real; 0 quando a origem é uma ocorrência ainda virtual. */
   appointmentId: number;
   oldIso: string;
   /** Cliente-alvo quando a remarcação é feita pelo barbeiro (preserva o alvo). */
   targetUserId?: number;
+  /**
+   * Série fixa de origem quando a remarcação parte de uma ocorrência projetada
+   * (virtual): na confirmação, materializa-se a semana no novo horário.
+   */
+  seriesId?: number;
 }
 
 export const ScheduleMenuLabels: Record<ScheduleMenuOption, string> = {

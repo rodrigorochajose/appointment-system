@@ -111,7 +111,7 @@ export class WhatsAppService {
       return this.conversationData.getState(data.from);
     }
 
-    const userHasApt = await this.appointmentService.findManyByUserId(user.id);
+    const userHasApt = await this.appointmentService.listUserOccurrences(user.id);
 
     const userStep =
       userHasApt.length > 0 ? ConversationStep.FULL_MENU : ConversationStep.SCHEDULE_MENU;

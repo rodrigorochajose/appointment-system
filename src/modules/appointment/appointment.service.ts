@@ -1,12 +1,15 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DATABASE_CONNECTION } from 'src/database/database.module';
 import { MySql2Database } from 'drizzle-orm/mysql2';
-import { and, asc, eq, gte, isNotNull, lt } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, lt } from 'drizzle-orm';
 import {
   appointments,
+  fixedSeries,
+  fixedSeriesExceptions,
   schedules,
   unavailablePeriods,
   workingHours,
+  FixedSeries,
   UnavailablePeriod,
   WorkingHour,
 } from 'src/database/schemas';
@@ -45,6 +48,35 @@ export type SlotListItem = {
   id: string;
   title: string;
 };
+
+/** Uma ocorrência futura de um cliente (linha real OU projeção de série fixa). */
+export type UserOccurrence = {
+  /** Id da linha na lista do WhatsApp: real = `"<id>"`; virtual = `"v<seriesId>_<epochMs>"`. */
+  rowId: string;
+  datetime: Date;
+  /** Id do agendamento real, ou null se ainda virtual (projetada, não materializada). */
+  appointmentId: number | null;
+  /** Série fixa de origem, quando aplicável. */
+  seriesId: number | null;
+};
+
+/** Interpreta um `rowId` de {@link UserOccurrence} vindo da lista do WhatsApp. */
+export function parseOccurrenceRowId(rowId: string): {
+  appointmentId: number | null;
+  seriesId: number | null;
+  datetime: Date | null;
+} {
+  const m = /^v(\d+)_(\d+)$/.exec(rowId);
+  if (m) {
+    return { appointmentId: null, seriesId: Number(m[1]), datetime: new Date(Number(m[2])) };
+  }
+  const id = Number(rowId);
+  return {
+    appointmentId: Number.isNaN(id) || id <= 0 ? null : id,
+    seriesId: null,
+    datetime: null,
+  };
+}
 
 export function toSlotListItems(days: DailyAvailability[]): SlotListItem[] {
   const items: SlotListItem[] = [];
@@ -240,7 +272,11 @@ export class AppointmentService {
     }
   }
 
-  /** Cancela todos os agendamentos de um cliente (banco + eventos no Google Calendar). */
+  /**
+   * Cancela todos os agendamentos de um cliente (banco + eventos no Google) e
+   * desativa suas séries fixas (removendo o evento recorrente), para que a
+   * projeção também pare de ocupar horários futuros.
+   */
   async cancelAllByUserId(userId: number): Promise<void> {
     try {
       const list = await this.findManyByUserId(userId);
@@ -251,7 +287,23 @@ export class AppointmentService {
         }
       }
 
-      await this.db.delete(appointments).where(eq(appointments.userId, userId));
+      const activeSeries = await this.db
+        .select()
+        .from(fixedSeries)
+        .where(and(eq(fixedSeries.userId, userId), eq(fixedSeries.active, true)));
+      for (const s of activeSeries) {
+        if (s.googleEventId && s.workerId) {
+          await this.deleteGoogleEvent(s.workerId, s.googleEventId);
+        }
+      }
+
+      await this.db.transaction(async (tx) => {
+        await tx.delete(appointments).where(eq(appointments.userId, userId));
+        await tx
+          .update(fixedSeries)
+          .set({ active: false, googleEventId: null })
+          .where(and(eq(fixedSeries.userId, userId), eq(fixedSeries.active, true)));
+      });
     } catch (error) {
       handleDatabaseError(error);
     }
@@ -409,9 +461,10 @@ export class AppointmentService {
     if (!eventId) return { cancelled: 0, moved: 0 };
 
     const appointment = await this.findByGoogleEventId(eventId);
-    // Evento sem agendamento correspondente: criado direto no Google (fora de
-    // escopo) ou já removido pelo próprio sistema. No-op (evita loop de eco).
-    if (!appointment) return { cancelled: 0, moved: 0 };
+    // Evento sem agendamento correspondente: pode ser o evento recorrente de uma
+    // série fixa (ou uma de suas instâncias) — tenta reconciliar por lá. Se nem
+    // isso casar, é evento fora de escopo / eco do próprio sistema → no-op.
+    if (!appointment) return this.reconcileFixedSeriesEvent(event);
 
     if (event.status === 'cancelled') {
       await this.db.delete(appointments).where(eq(appointments.id, appointment.id));
@@ -454,6 +507,104 @@ export class AppointmentService {
     }
 
     return { cancelled: 0, moved: 0 };
+  }
+
+  /**
+   * Reconcilia um evento do Google que se refere a uma SÉRIE FIXA (o próprio
+   * evento recorrente ou uma de suas instâncias). Cobre:
+   * - master cancelado → desativa a série;
+   * - instância cancelada → grava exceção (pula aquela semana);
+   * - instância movida → materializa a ocorrência no novo horário (só no banco;
+   *   não mexe no Google para não ecoar).
+   */
+  private async reconcileFixedSeriesEvent(
+    event: calendar_v3.Schema$Event,
+  ): Promise<{ cancelled: number; moved: number }> {
+    // 1) É o evento recorrente (master) de uma série?
+    if (event.id) {
+      const [master] = await this.db
+        .select()
+        .from(fixedSeries)
+        .where(eq(fixedSeries.googleEventId, event.id));
+      if (master) {
+        if (event.status === 'cancelled') {
+          await this.db
+            .update(fixedSeries)
+            .set({ active: false, googleEventId: null })
+            .where(eq(fixedSeries.id, master.id));
+          log.info('syncCalendar: série fixa desativada via Google Calendar', {
+            seriesId: master.id,
+            eventId: event.id,
+          });
+          return { cancelled: 1, moved: 0 };
+        }
+        // Mudança de RRULE/horário do master: fora de escopo por ora.
+        return { cancelled: 0, moved: 0 };
+      }
+    }
+
+    // 2) É uma INSTÂNCIA de uma série (cancelada ou movida)?
+    const recurringId = event.recurringEventId;
+    if (!recurringId) return { cancelled: 0, moved: 0 };
+
+    const [series] = await this.db
+      .select()
+      .from(fixedSeries)
+      .where(eq(fixedSeries.googleEventId, recurringId));
+    if (!series) return { cancelled: 0, moved: 0 };
+
+    const origStr = event.originalStartTime?.dateTime;
+    if (!origStr) return { cancelled: 0, moved: 0 };
+    const origDate = new Date(origStr);
+    if (Number.isNaN(origDate.getTime())) return { cancelled: 0, moved: 0 };
+    const origDay = this.startOfDayBR(origDate);
+
+    if (event.status === 'cancelled') {
+      await this.db
+        .insert(fixedSeriesExceptions)
+        .values({ seriesId: series.id, date: origDay })
+        .onDuplicateKeyUpdate({ set: { date: origDay } });
+      log.info('syncCalendar: ocorrência de série pulada via Google Calendar', {
+        seriesId: series.id,
+        date: formatBrazil(origDate),
+      });
+      return { cancelled: 1, moved: 0 };
+    }
+
+    const newStr = event.start?.dateTime;
+    if (!newStr) return { cancelled: 0, moved: 0 };
+    const newDate = new Date(newStr);
+    if (Number.isNaN(newDate.getTime()) || newDate.getTime() === origDate.getTime()) {
+      return { cancelled: 0, moved: 0 };
+    }
+
+    try {
+      await this.db
+        .insert(fixedSeriesExceptions)
+        .values({ seriesId: series.id, date: origDay })
+        .onDuplicateKeyUpdate({ set: { date: origDay } });
+      await this.db.insert(appointments).values({
+        userId: series.userId,
+        workerId: series.workerId,
+        offeringId: series.offeringId,
+        fixed: true,
+        fixedSeriesId: series.id,
+        datetime: newDate,
+        googleEventId: event.id ?? null,
+      });
+      log.info('syncCalendar: ocorrência de série movida via Google Calendar', {
+        seriesId: series.id,
+        from: formatBrazil(origDate),
+        to: formatBrazil(newDate),
+      });
+      return { cancelled: 0, moved: 1 };
+    } catch (err) {
+      log.warn('syncCalendar: não foi possível materializar ocorrência movida (ocupado?)', {
+        seriesId: series.id,
+        error: err instanceof Error ? err.message : err,
+      });
+      return { cancelled: 0, moved: 0 };
+    }
   }
 
   private async findByGoogleEventId(eventId: string): Promise<AppointmentResponseDto | undefined> {
@@ -613,6 +764,43 @@ export class AppointmentService {
     return await this.db.select().from(appointments).where(eq(appointments.userId, userId));
   }
 
+  /**
+   * Ocorrências FUTURAS de um cliente para os fluxos do bot (listar/cancelar/
+   * remarcar): linhas reais + ocorrências projetadas das séries fixas, ordenadas
+   * por horário. Cada item traz um `rowId` para a lista do WhatsApp — real
+   * (`"<id>"`) ou virtual (`"v<seriesId>_<epochMs>"`, ainda não materializada).
+   */
+  async listUserOccurrences(
+    userId: number,
+    from: Date = new Date(),
+  ): Promise<UserOccurrence[]> {
+    const horizonEnd = new Date(from.getTime() + BOOKING_WINDOW_DAYS * ONE_DAY_MS);
+
+    const real = await this.db
+      .select()
+      .from(appointments)
+      .where(and(eq(appointments.userId, userId), gte(appointments.datetime, from)));
+
+    const projected = await this.expandSeriesInRange({ userId }, from, horizonEnd);
+
+    const items: UserOccurrence[] = [
+      ...real.map((r) => ({
+        rowId: String(r.id),
+        datetime: r.datetime,
+        appointmentId: r.id,
+        seriesId: r.fixedSeriesId,
+      })),
+      ...projected.map((p) => ({
+        rowId: `v${p.seriesId}_${p.datetime.getTime()}`,
+        datetime: p.datetime,
+        appointmentId: null,
+        seriesId: p.seriesId,
+      })),
+    ];
+
+    return items.sort((a, b) => a.datetime.getTime() - b.datetime.getTime());
+  }
+
   async findUnique(id: number): Promise<AppointmentResponseDto> {
     const [appointment] = await this.db.select().from(appointments).where(eq(appointments.id, id));
 
@@ -647,13 +835,20 @@ export class AppointmentService {
         ),
       );
 
-    return rows.filter((apt) => apt.datetime.getTime() + SLOT_DURATION_MS > begin.getTime());
+    // Inclui ocorrências projetadas de séries fixas (para detectar/avisar o conflito).
+    const projected = (await this.expandSeriesInRange({ workerId }, lower, end)).map((p) =>
+      this.projectionToDto(p),
+    );
+
+    return [...rows, ...projected].filter(
+      (apt) => apt.datetime.getTime() + SLOT_DURATION_MS > begin.getTime(),
+    );
   }
 
-  /** Agendamentos de um profissional num dia (00:00–24:00 do `dayStart`). */
+  /** Agendamentos de um profissional num dia (00:00–24:00 do `dayStart`), reais + projetados. */
   async findManyByWorkerOnDay(workerId: number, dayStart: Date): Promise<AppointmentResponseDto[]> {
     const dayEnd = new Date(dayStart.getTime() + ONE_DAY_MS);
-    return await this.db
+    const rows = await this.db
       .select()
       .from(appointments)
       .where(
@@ -663,6 +858,58 @@ export class AppointmentService {
           lt(appointments.datetime, dayEnd),
         ),
       );
+
+    const projected = (await this.expandSeriesInRange({ workerId }, dayStart, dayEnd)).map((p) =>
+      this.projectionToDto(p),
+    );
+
+    return [...rows, ...projected].sort(
+      (a, b) => a.datetime.getTime() - b.datetime.getTime(),
+    );
+  }
+
+  /** Converte uma ocorrência projetada num DTO sintético (id=0, sem evento próprio). */
+  private projectionToDto(p: {
+    seriesId: number;
+    userId: number;
+    workerId: number;
+    offeringId: number;
+    datetime: Date;
+  }): AppointmentResponseDto {
+    return {
+      id: 0,
+      userId: p.userId,
+      workerId: p.workerId,
+      offeringId: p.offeringId,
+      datetime: p.datetime,
+      fixed: true,
+      seriesId: null,
+      fixedSeriesId: p.seriesId,
+      googleEventId: null,
+      createdAt: p.datetime,
+      updatedAt: p.datetime,
+    };
+  }
+
+  /**
+   * Cancela UMA semana de uma série sem materializar: grava exceção (a projeção
+   * para de gerar a ocorrência) e remove a instância do evento recorrente no
+   * Google (best-effort). Usado quando a indisponibilização conflita com um fixo.
+   */
+  async skipSeriesOccurrence(seriesId: number, occurrence: Date): Promise<void> {
+    const day = this.startOfDayBR(occurrence);
+    await this.db
+      .insert(fixedSeriesExceptions)
+      .values({ seriesId, date: day })
+      .onDuplicateKeyUpdate({ set: { date: day } });
+
+    const [series] = await this.db
+      .select()
+      .from(fixedSeries)
+      .where(eq(fixedSeries.id, seriesId));
+    if (series?.googleEventId && series.workerId) {
+      await this.cancelRecurringInstance(series.workerId, series.googleEventId, occurrence);
+    }
   }
 
   /**
@@ -678,260 +925,374 @@ export class AppointmentService {
     const todays = await this.findManyByWorkerOnDay(workerId, todayStart);
     const remainingToday = todays.filter((apt) => apt.datetime.getTime() > now.getTime()).length;
 
-    const [next] = await this.db
+    const [nextReal] = await this.db
       .select()
       .from(appointments)
       .where(and(eq(appointments.workerId, workerId), gte(appointments.datetime, now)))
       .orderBy(asc(appointments.datetime))
       .limit(1);
 
-    return {
-      remainingToday,
-      next: next ? { datetime: next.datetime, userId: next.userId } : null,
-    };
+    // Considera também a próxima ocorrência projetada de uma série fixa.
+    const horizonEnd = new Date(now.getTime() + BOOKING_WINDOW_DAYS * ONE_DAY_MS);
+    const projected = await this.expandSeriesInRange({ workerId }, now, horizonEnd);
+
+    let next: { datetime: Date; userId: number } | null = nextReal
+      ? { datetime: nextReal.datetime, userId: nextReal.userId }
+      : null;
+    for (const p of projected) {
+      if (!next || p.datetime.getTime() < next.datetime.getTime()) {
+        next = { datetime: p.datetime, userId: p.userId };
+      }
+    }
+
+    return { remainingToday, next };
   }
 
   // ============================================================
-  // FIXAR CLIENTE (séries recorrentes semanais materializadas)
+  // FIXAR CLIENTE (séries recorrentes semanais — projeção virtual)
+  //
+  // A série é uma REGRA (uma linha em `fixed_series`): dia da semana + horário.
+  // As ocorrências NÃO são materializadas em `appointment`; são projetadas em
+  // tempo de leitura por `expandSeriesInRange`. Só viram linha real quando
+  // desviam da regra (remarcação/cancelamento de uma semana → `materializeOccurrence`).
+  // Não há cron para "estender" nem janela rolante: a projeção cobre qualquer
+  // intervalo pedido.
   // ============================================================
 
   /**
-   * Materializa uma série semanal a partir de `firstOccurrence`, criando uma
-   * linha por semana até a borda da janela de agendamento (cada uma com seu
-   * evento no Google Calendar). Se já houver um agendamento do MESMO cliente no
-   * horário, ele é incorporado à série; se for de outro cliente, a semana é pulada.
+   * Cria uma fixação semanal a partir de `firstOccurrence` (dia+hora âncora).
+   * Insere UMA regra em `fixed_series`; quando o worker tem conta Google,
+   * espelha como um único evento recorrente (RRULE WEEKLY). Sem materializar
+   * ocorrências — o bloqueio dos slots vem da projeção.
    */
   async createFixedSeries(
     workerId: number,
     userId: number,
     firstOccurrence: Date,
-  ): Promise<{ seriesId: string; created: number; merged: number; skipped: number }> {
-    const seriesId = randomUUID();
-    const { endExclusive } = this.getBookingWindow();
-    const now = Date.now();
-    let created = 0;
-    let merged = 0;
-    let skipped = 0;
+  ): Promise<{ seriesId: number }> {
+    const dayStart = this.startOfDayBR(firstOccurrence);
+    const weekday = dayStart.getDay();
+    const time = this.formatHour(firstOccurrence);
 
-    for (
-      let occ = new Date(firstOccurrence);
-      occ.getTime() < endExclusive.getTime();
-      occ = new Date(occ.getTime() + ONE_DAY_MS * 7)
-    ) {
-      if (occ.getTime() <= now) continue;
+    const [result] = await this.db.insert(fixedSeries).values({
+      workerId,
+      userId,
+      offeringId: 1,
+      weekday,
+      time,
+      startDate: dayStart,
+      active: true,
+    });
+    const seriesId = result.insertId;
 
-      // Procura por uma janela de 1 minuto para tolerar diferenças de
-      // segundos/precisão entre o instante calculado e o valor persistido.
-      const slotEnd = new Date(occ.getTime() + 60 * 1000);
-      const [existing] = await this.db
-        .select()
-        .from(appointments)
-        .where(
-          and(
-            eq(appointments.workerId, workerId),
-            gte(appointments.datetime, occ),
-            lt(appointments.datetime, slotEnd),
-          ),
-        );
-
-      if (existing) {
-        if (existing.userId === userId) {
-          await this.db
-            .update(appointments)
-            .set({ fixed: true, seriesId })
-            .where(eq(appointments.id, existing.id));
-          merged++;
-        } else {
-          skipped++;
-        }
-        continue;
+    try {
+      const eventId = await this.createRecurringGoogleEvent(workerId, userId, firstOccurrence);
+      if (eventId) {
+        await this.db
+          .update(fixedSeries)
+          .set({ googleEventId: eventId })
+          .where(eq(fixedSeries.id, seriesId));
       }
-
-      try {
-        await this.createSeriesOccurrence(workerId, userId, occ, seriesId);
-        created++;
-      } catch (error) {
-        // Corrida com a unique (worker_id, datetime): outra linha ocupou o slot
-        // entre a checagem e o insert. Reavalia para mesclar (mesmo cliente) ou pular.
-        const [conflict] = await this.db
-          .select()
-          .from(appointments)
-          .where(
-            and(
-              eq(appointments.workerId, workerId),
-              gte(appointments.datetime, occ),
-              lt(appointments.datetime, slotEnd),
-            ),
-          );
-        if (conflict && conflict.userId === userId) {
-          await this.db
-            .update(appointments)
-            .set({ fixed: true, seriesId })
-            .where(eq(appointments.id, conflict.id));
-          merged++;
-        } else {
-          log.warn('createFixedSeries: falha ao materializar ocorrência', {
-            workerId,
-            userId,
-            occ: occ.toISOString(),
-            error: error instanceof Error ? error.message : error,
-          });
-          skipped++;
-        }
-      }
+    } catch (error) {
+      log.warn('createFixedSeries: evento recorrente Google falhou (série mantida)', {
+        workerId,
+        userId,
+        error: error instanceof Error ? error.message : error,
+      });
     }
 
-    return { seriesId, created, merged, skipped };
+    return { seriesId };
   }
 
   /**
-   * Cria uma única ocorrência da série. A linha é criada primeiro; o evento no
-   * Google é best-effort — se falhar (ex.: sem conta Google), o agendamento é
-   * mantido mesmo assim (diferente do `create()` avulso, que é tudo-ou-nada).
+   * Projeta as ocorrências das séries fixas ativas dentro de [rangeStart,
+   * rangeEnd), SEM materializar nada. Respeita `startDate`, exceções e pula
+   * horários já ocupados por uma linha real (para não duplicar com agendamentos
+   * avulsos nem com ocorrências já materializadas/remarcadas). Filtra por worker
+   * (disponibilidade/agenda) e/ou por cliente (meus horários).
    */
-  private async createSeriesOccurrence(
+  async expandSeriesInRange(
+    filter: { workerId?: number; userId?: number },
+    rangeStart: Date,
+    rangeEnd: Date,
+  ): Promise<
+    { seriesId: number; userId: number; workerId: number; offeringId: number; datetime: Date }[]
+  > {
+    if (rangeEnd.getTime() <= rangeStart.getTime()) return [];
+
+    const conds = [eq(fixedSeries.active, true)];
+    if (filter.workerId !== undefined) conds.push(eq(fixedSeries.workerId, filter.workerId));
+    if (filter.userId !== undefined) conds.push(eq(fixedSeries.userId, filter.userId));
+
+    const series = await this.db
+      .select()
+      .from(fixedSeries)
+      .where(and(...conds));
+    if (series.length === 0) return [];
+
+    const seriesIds = series.map((s) => s.id);
+    const exRows = await this.db
+      .select()
+      .from(fixedSeriesExceptions)
+      .where(inArray(fixedSeriesExceptions.seriesId, seriesIds));
+    const exceptionSet = new Set(
+      exRows.map((e) => `${e.seriesId}|${this.startOfDayBR(e.date).getTime()}`),
+    );
+
+    // Slots já ocupados por linhas reais dos workers envolvidos (não duplicar).
+    const workerIds = [
+      ...new Set(series.map((s) => s.workerId).filter((w): w is number => w != null)),
+    ];
+    const occupied = new Set<string>();
+    if (workerIds.length > 0) {
+      const realRows = await this.db
+        .select({ workerId: appointments.workerId, datetime: appointments.datetime })
+        .from(appointments)
+        .where(
+          and(
+            inArray(appointments.workerId, workerIds),
+            gte(appointments.datetime, rangeStart),
+            lt(appointments.datetime, rangeEnd),
+          ),
+        );
+      for (const r of realRows) {
+        if (r.workerId != null) occupied.add(`${r.workerId}|${r.datetime.getTime()}`);
+      }
+    }
+
+    const firstDay = this.startOfDayBR(rangeStart);
+    const numDays = Math.ceil((rangeEnd.getTime() - firstDay.getTime()) / ONE_DAY_MS) + 1;
+
+    const out: {
+      seriesId: number;
+      userId: number;
+      workerId: number;
+      offeringId: number;
+      datetime: Date;
+    }[] = [];
+    for (const s of series) {
+      if (s.workerId == null) continue;
+      const seriesStart = this.startOfDayBR(s.startDate);
+      for (let offset = 0; offset < numDays; offset++) {
+        const dayStart = new Date(firstDay.getTime() + offset * ONE_DAY_MS);
+        if (dayStart.getDay() !== s.weekday) continue;
+        if (dayStart.getTime() < seriesStart.getTime()) continue;
+        const occ = this.combineDateAndTime(dayStart, `${s.time}:00`);
+        if (occ.getTime() < rangeStart.getTime() || occ.getTime() >= rangeEnd.getTime()) continue;
+        if (exceptionSet.has(`${s.id}|${dayStart.getTime()}`)) continue;
+        if (occupied.has(`${s.workerId}|${occ.getTime()}`)) continue;
+        out.push({
+          seriesId: s.id,
+          userId: s.userId,
+          workerId: s.workerId,
+          offeringId: s.offeringId,
+          datetime: occ,
+        });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Materializa uma ocorrência projetada como linha real em `appointment`,
+   * gravando exceção na data original (para a projeção parar de gerá-la). Usada
+   * quando o cliente/barbeiro remarca ou cancela UMA semana da série. Se
+   * `newDatetime` for informado (remarcação), a linha fica no novo horário e
+   * ganha um evento avulso no Google; a instância original do evento recorrente
+   * é removida (best-effort). Retorna a linha criada.
+   */
+  async materializeOccurrence(
+    seriesId: number,
+    originalDatetime: Date,
+    newDatetime?: Date,
+  ): Promise<{ id: number; datetime: Date }> {
+    const [series] = await this.db
+      .select()
+      .from(fixedSeries)
+      .where(eq(fixedSeries.id, seriesId));
+    if (!series) throw new NotFoundException('Fixed series not found');
+
+    const target = newDatetime ?? originalDatetime;
+    const originalDay = this.startOfDayBR(originalDatetime);
+
+    // Exceção na data original (idempotente via unique series+date).
+    await this.db
+      .insert(fixedSeriesExceptions)
+      .values({ seriesId, date: originalDay })
+      .onDuplicateKeyUpdate({ set: { date: originalDay } });
+
+    const [result] = await this.db.insert(appointments).values({
+      userId: series.userId,
+      workerId: series.workerId,
+      offeringId: series.offeringId,
+      fixed: true,
+      fixedSeriesId: seriesId,
+      datetime: target,
+    });
+    const id = result.insertId;
+
+    // Google (best-effort): tira a instância original do evento recorrente e,
+    // se remarcado, cria um evento avulso no novo horário.
+    if (series.workerId && series.googleEventId) {
+      await this.cancelRecurringInstance(series.workerId, series.googleEventId, originalDatetime);
+    }
+    if (series.workerId && newDatetime) {
+      try {
+        const eventId = await this.createGoogleEvent(
+          series.workerId,
+          series.userId,
+          formatBrazil(target),
+        );
+        if (eventId) {
+          await this.db
+            .update(appointments)
+            .set({ googleEventId: eventId })
+            .where(eq(appointments.id, id));
+        }
+      } catch (error) {
+        log.warn('materializeOccurrence: evento Google avulso falhou (linha mantida)', {
+          seriesId,
+          error: error instanceof Error ? error.message : error,
+        });
+      }
+    }
+
+    return { id, datetime: target };
+  }
+
+  /** Cria um evento recorrente semanal (RRULE WEEKLY) no Google Calendar. */
+  async createRecurringGoogleEvent(
     workerId: number,
     userId: number,
-    occ: Date,
-    seriesId: string,
-  ): Promise<void> {
-    const [result] = await this.db.insert(appointments).values({
-      userId,
-      workerId,
-      offeringId: 1,
-      fixed: true,
-      seriesId,
-      datetime: occ,
+    firstOccurrence: Date,
+  ): Promise<string | null> {
+    const userName = await this.userService.getNameById(userId);
+    if (!userName) {
+      throw new NotFoundException('User not found');
+    }
+
+    const googleAccount = await this.googleAccountService.findUnique(workerId);
+    if (!googleAccount) return null;
+
+    const calendar = this.googleService.getCalendarClient(googleAccount.googleRefreshToken);
+    if (!calendar) return null;
+
+    const startIso = formatBrazil(firstOccurrence);
+    const endIso = formatBrazil(new Date(firstOccurrence.getTime() + SLOT_DURATION_MS));
+
+    const { data } = await calendar.events.insert({
+      calendarId: googleAccount.googleCalendarId,
+      requestBody: {
+        summary: `Corte - ${userName} (fixo)`,
+        start: { dateTime: startIso, timeZone: 'America/Sao_Paulo' },
+        end: { dateTime: endIso, timeZone: 'America/Sao_Paulo' },
+        recurrence: ['RRULE:FREQ=WEEKLY'],
+        reminders: { useDefault: false, overrides: [] },
+        extendedProperties: { private: { type: 'fixed_series' } },
+      },
     });
 
+    return data.id ?? null;
+  }
+
+  /**
+   * Remove UMA instância de um evento recorrente do Google (best-effort). Usado
+   * ao materializar/cancelar uma semana isolada da série, para o Google não
+   * exibir a ocorrência recorrente junto com a linha materializada.
+   */
+  private async cancelRecurringInstance(
+    workerId: number,
+    recurringEventId: string,
+    occurrence: Date,
+  ): Promise<void> {
     try {
-      const eventId = await this.createGoogleEvent(workerId, userId, formatBrazil(occ));
-      if (eventId) {
-        await this.db
-          .update(appointments)
-          .set({ googleEventId: eventId })
-          .where(eq(appointments.id, result.insertId));
+      const googleAccount = await this.googleAccountService.findUnique(workerId);
+      if (!googleAccount) return;
+
+      const calendar = this.googleService.getCalendarClient(googleAccount.googleRefreshToken);
+      if (!calendar) return;
+
+      const { data } = await calendar.events.instances({
+        calendarId: googleAccount.googleCalendarId,
+        eventId: recurringEventId,
+        timeMin: new Date(occurrence.getTime() - 60 * 1000).toISOString(),
+        timeMax: new Date(occurrence.getTime() + SLOT_DURATION_MS).toISOString(),
+        maxResults: 5,
+      });
+
+      for (const inst of data.items ?? []) {
+        const startStr = inst.start?.dateTime;
+        if (!startStr || !inst.id) continue;
+        if (new Date(startStr).getTime() === occurrence.getTime()) {
+          await calendar.events.delete({
+            calendarId: googleAccount.googleCalendarId,
+            eventId: inst.id,
+          });
+          return;
+        }
       }
     } catch (error) {
-      log.warn('createSeriesOccurrence: evento Google falhou (agendamento mantido)', {
+      log.warn('cancelRecurringInstance: falha ao cancelar instância recorrente', {
         workerId,
-        userId,
-        occ: occ.toISOString(),
+        recurringEventId,
         error: error instanceof Error ? error.message : error,
       });
     }
   }
 
-  /** Séries ativas (com ocorrências futuras) de um cliente, com a próxima data de cada. */
-  async findActiveSeriesByUser(userId: number): Promise<{ seriesId: string; next: Date }[]> {
+  /** Séries fixas ativas de um cliente, com a próxima ocorrência projetada de cada. */
+  async findActiveSeriesByUser(userId: number): Promise<{ seriesId: number; next: Date }[]> {
     const now = new Date();
-    const rows = await this.db
-      .select()
-      .from(appointments)
-      .where(
-        and(
-          eq(appointments.userId, userId),
-          isNotNull(appointments.seriesId),
-          gte(appointments.datetime, now),
-        ),
-      );
+    const horizonEnd = new Date(now.getTime() + BOOKING_WINDOW_DAYS * ONE_DAY_MS);
+    const occ = await this.expandSeriesInRange({ userId }, now, horizonEnd);
 
-    const earliest = new Map<string, Date>();
-    for (const row of rows) {
-      if (!row.seriesId) continue;
-      const cur = earliest.get(row.seriesId);
-      if (!cur || row.datetime < cur) earliest.set(row.seriesId, row.datetime);
+    const earliest = new Map<number, Date>();
+    for (const o of occ) {
+      const cur = earliest.get(o.seriesId);
+      if (!cur || o.datetime < cur) earliest.set(o.seriesId, o.datetime);
     }
     return [...earliest.entries()].map(([seriesId, next]) => ({ seriesId, next }));
   }
 
   /**
-   * "Desfixa" uma série: remove as ocorrências FUTURAS (banco + eventos Google)
-   * e desvincula as PASSADAS (limpa series_id/fixed) para que continuem como
-   * histórico — e para que o cron não ressuscite a série a partir delas.
-   * Retorna quantas ocorrências futuras foram canceladas.
+   * "Desfixa" uma série: marca como inativa (para de projetar), remove o evento
+   * recorrente do Google e apaga as ocorrências FUTURAS já materializadas
+   * (linhas reais + seus eventos avulsos). As linhas passadas ficam como
+   * histórico. Retorna quantas ocorrências futuras materializadas foram removidas.
    */
-  async cancelSeriesFromNow(seriesId: string): Promise<number> {
+  async cancelSeriesFromNow(seriesId: number): Promise<number> {
     const now = new Date();
+    const [series] = await this.db
+      .select()
+      .from(fixedSeries)
+      .where(eq(fixedSeries.id, seriesId));
+    if (!series) return 0;
+
     const future = await this.db
       .select()
       .from(appointments)
-      .where(and(eq(appointments.seriesId, seriesId), gte(appointments.datetime, now)));
-
+      .where(and(eq(appointments.fixedSeriesId, seriesId), gte(appointments.datetime, now)));
     for (const row of future) {
       if (row.googleEventId && row.workerId) {
         await this.deleteGoogleEvent(row.workerId, row.googleEventId);
       }
     }
 
-    // Atômico: remove as futuras e desvincula as passadas de uma vez, para que o
-    // cron de extensão nunca veja a série "meio cancelada" e a ressuscite.
+    if (series.googleEventId && series.workerId) {
+      await this.deleteGoogleEvent(series.workerId, series.googleEventId);
+    }
+
     await this.db.transaction(async (tx) => {
       await tx
         .delete(appointments)
-        .where(and(eq(appointments.seriesId, seriesId), gte(appointments.datetime, now)));
-
+        .where(and(eq(appointments.fixedSeriesId, seriesId), gte(appointments.datetime, now)));
       await tx
-        .update(appointments)
-        .set({ seriesId: null, fixed: false })
-        .where(and(eq(appointments.seriesId, seriesId), lt(appointments.datetime, now)));
+        .update(fixedSeries)
+        .set({ active: false, googleEventId: null })
+        .where(eq(fixedSeries.id, seriesId));
     });
 
     return future.length;
-  }
-
-  /**
-   * Estende todas as séries ativas até a borda da janela rolante (chamado pelo cron).
-   * Para cada série, parte da última ocorrência e cria as semanas que faltam.
-   */
-  async extendFixedSeries(): Promise<{ seriesId: string; created: number }[]> {
-    const { endExclusive } = this.getBookingWindow();
-    const rows = await this.db
-      .select()
-      .from(appointments)
-      .where(isNotNull(appointments.seriesId));
-
-    const series = new Map<string, { userId: number; workerId: number; last: Date }>();
-    for (const row of rows) {
-      if (!row.seriesId || !row.workerId) continue;
-      const cur = series.get(row.seriesId);
-      if (!cur || row.datetime > cur.last) {
-        series.set(row.seriesId, { userId: row.userId, workerId: row.workerId, last: row.datetime });
-      }
-    }
-
-    const now = Date.now();
-    const results: { seriesId: string; created: number }[] = [];
-    for (const [seriesId, info] of series) {
-      let created = 0;
-      for (
-        let occ = new Date(info.last.getTime() + ONE_DAY_MS * 7);
-        occ.getTime() < endExclusive.getTime();
-        occ = new Date(occ.getTime() + ONE_DAY_MS * 7)
-      ) {
-        if (occ.getTime() <= now) continue;
-
-        const [existing] = await this.db
-          .select()
-          .from(appointments)
-          .where(and(eq(appointments.workerId, info.workerId), eq(appointments.datetime, occ)));
-        if (existing) continue;
-
-        try {
-          await this.createSeriesOccurrence(info.workerId, info.userId, occ, seriesId);
-          created++;
-        } catch (error) {
-          log.warn('extendFixedSeries: falha ao estender série', {
-            seriesId,
-            occ: occ.toISOString(),
-            error: error instanceof Error ? error.message : error,
-          });
-        }
-      }
-      if (created > 0) results.push({ seriesId, created });
-    }
-
-    return results;
   }
 
   async update(id: number, data: UpdateAppointmentDto): Promise<AppointmentResponseDto> {
@@ -1019,7 +1380,13 @@ export class AppointmentService {
       whByWeekday.set(wh.weekday, list);
     }
 
-    const bookedSet = new Set(booked.map((b) => b.datetime.getTime()));
+    // Séries fixas: ocorrências projetadas também ocupam o slot (sem materializar).
+    const projected = await this.expandSeriesInRange({ workerId }, rangeStart, effectiveEnd);
+
+    const bookedSet = new Set([
+      ...booked.map((b) => b.datetime.getTime()),
+      ...projected.map((p) => p.datetime.getTime()),
+    ]);
     const now = Date.now();
     const result: DailyAvailability[] = [];
     let totalSlots = 0;

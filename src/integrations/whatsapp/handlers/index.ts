@@ -45,7 +45,11 @@ import {
 import { IncomingMessageParsed } from '../dto/whatsapp-webhook.dto';
 import { log } from '@/common/logger';
 import { UserService } from '@/modules/user/user.service';
-import { AppointmentService, toSlotListItems } from '@/modules/appointment/appointment.service';
+import {
+  AppointmentService,
+  parseOccurrenceRowId,
+  toSlotListItems,
+} from '@/modules/appointment/appointment.service';
 import { ScheduleService } from '@/modules/schedule/schedule.service';
 import { UnavailablePeriodService } from '@/modules/unavailable-period/unavailable-period.service';
 import { WorkingHourService, WorkingHourWindow } from '@/modules/working-hour/working-hour.service';
@@ -243,10 +247,10 @@ export class WhatsAppMessageHandlers {
   async handleCheckApt(handler: MessageHandlerPayload): Promise<void> {
     const userId = this.actingUserId(handler);
 
-    const appointments = await this.appointmentService.findManyByUserId(userId);
+    const occurrences = await this.appointmentService.listUserOccurrences(userId);
 
     const nextStep =
-      appointments.length > 1 ? ConversationStep.FULL_MENU : ConversationStep.SCHEDULE_MENU;
+      occurrences.length > 1 ? ConversationStep.FULL_MENU : ConversationStep.SCHEDULE_MENU;
 
     handler.setState(handler.data.from, { step: nextStep });
 
@@ -336,16 +340,16 @@ export class WhatsAppMessageHandlers {
       return;
     }
 
-    const appointments = await this.appointmentService.findManyByUserId(userId);
+    const occurrences = await this.appointmentService.listUserOccurrences(userId);
 
-    if (appointments.length === 0) {
+    if (occurrences.length === 0) {
       await handler.sendMessage('text', '📭 Você não tem nenhum agendamento.');
       await this.transitionTo(handler, this.homeStep(handler));
       return;
     }
 
-    const lines = appointments
-      .map((apt, i) => `${i + 1}. 🗓️ *${this.formatSlotLabel(apt.datetime.toISOString())}*`)
+    const lines = occurrences
+      .map((occ, i) => `${i + 1}. 🗓️ *${this.formatSlotLabel(occ.datetime.toISOString())}*`)
       .join('\n');
 
     await handler.sendMessage('button', `📋 Seus agendamentos:\n\n${lines}`, [
@@ -368,32 +372,32 @@ export class WhatsAppMessageHandlers {
       return;
     }
 
-    const appointments = await this.appointmentService.findManyByUserId(userId);
+    const occurrences = await this.appointmentService.listUserOccurrences(userId);
 
-    if (appointments.length === 0) {
+    if (occurrences.length === 0) {
       await handler.sendMessage('text', '📭 Nenhum agendamento para cancelar.');
       await this.transitionTo(handler, this.homeStep(handler));
       return;
     }
 
-    if (appointments.length === 1) {
-      const apt = appointments[0];
-      await this.promptCancelConfirm(handler, apt.id, apt.datetime.toISOString());
+    if (occurrences.length === 1) {
+      const occ = occurrences[0];
+      await this.promptCancelConfirm(handler, occ.rowId, occ.datetime.toISOString());
       return;
     }
 
     // WhatsApp limita listas a 10 linhas; reservamos 2 (Cancelar todos + Voltar).
     const MAX_ROWS = 8;
-    const shown = appointments.slice(0, MAX_ROWS);
+    const shown = occurrences.slice(0, MAX_ROWS);
     const body =
-      appointments.length > MAX_ROWS
+      occurrences.length > MAX_ROWS
         ? `🗑️ Selecione o agendamento para cancelar (mostrando os ${MAX_ROWS} mais próximos; use "Cancelar todos" para o restante)`
         : '🗑️ Selecione o agendamento que deseja cancelar';
 
     await handler.sendMessage('list', body, [
-      ...shown.map((apt) => ({
-        id: String(apt.id),
-        title: this.slotRowTitle(apt.datetime),
+      ...shown.map((occ) => ({
+        id: occ.rowId,
+        title: this.slotRowTitle(occ.datetime),
       })),
       { id: CANCEL_ALL_ID, title: '❌ Cancelar todos' },
       { id: BACK_ID, title: BACK_LABEL },
@@ -431,21 +435,27 @@ export class WhatsAppMessageHandlers {
       return;
     }
 
-    const appointmentId = Number(reply);
-    if (!appointmentId || Number.isNaN(appointmentId)) {
-      await handler.sendMessage('text', '⚠️ Seleção inválida. Escolha um agendamento da lista.');
+    const parsed = parseOccurrenceRowId(reply);
+
+    if (parsed.appointmentId) {
+      let appointment: Awaited<ReturnType<AppointmentService['findUnique']>>;
+      try {
+        appointment = await this.appointmentService.findUnique(parsed.appointmentId);
+      } catch {
+        await handler.sendMessage('text', '🔍 Agendamento não encontrado. Escolha um da lista.');
+        return;
+      }
+      await this.promptCancelConfirm(handler, reply, appointment.datetime.toISOString());
       return;
     }
 
-    let appointment: Awaited<ReturnType<AppointmentService['findUnique']>>;
-    try {
-      appointment = await this.appointmentService.findUnique(appointmentId);
-    } catch {
-      await handler.sendMessage('text', '🔍 Agendamento não encontrado. Escolha um da lista.');
+    // Ocorrência ainda virtual (série fixa): o horário vem do próprio rowId.
+    if (parsed.seriesId && parsed.datetime) {
+      await this.promptCancelConfirm(handler, reply, parsed.datetime.toISOString());
       return;
     }
 
-    await this.promptCancelConfirm(handler, appointment.id, appointment.datetime.toISOString());
+    await handler.sendMessage('text', '⚠️ Seleção inválida. Escolha um agendamento da lista.');
   }
 
   async handleCancelConfirm(handler: MessageHandlerPayload): Promise<void> {
@@ -468,15 +478,20 @@ export class WhatsAppMessageHandlers {
       return;
     }
 
-    const appointmentId = Number(handler.conversationData.data);
-    if (!appointmentId || Number.isNaN(appointmentId)) {
+    const parsed = parseOccurrenceRowId(handler.conversationData.data ?? '');
+    if (!parsed.appointmentId && !(parsed.seriesId && parsed.datetime)) {
       await handler.sendMessage('text', '⚠️ Ocorreu um erro ao cancelar. Vamos recomeçar.');
       await this.transitionTo(handler, this.homeStep(handler));
       return;
     }
 
     try {
-      await this.appointmentService.cancel(appointmentId);
+      if (parsed.appointmentId) {
+        await this.appointmentService.cancel(parsed.appointmentId);
+      } else if (parsed.seriesId && parsed.datetime) {
+        // Cancela só aquela semana da série fixa (exceção, sem materializar).
+        await this.appointmentService.skipSeriesOccurrence(parsed.seriesId, parsed.datetime);
+      }
     } catch (err) {
       log.error(
         'handleCancelConfirm: falha ao cancelar',
@@ -533,7 +548,7 @@ export class WhatsAppMessageHandlers {
   /** Renderiza a confirmação de cancelamento de um agendamento e aguarda Sim/Não. */
   private async promptCancelConfirm(
     handler: MessageHandlerPayload,
-    appointmentId: number,
+    rowId: string,
     iso: string,
   ): Promise<void> {
     await handler.sendMessage(
@@ -551,9 +566,10 @@ export class WhatsAppMessageHandlers {
       ],
     );
 
+    // Guarda o rowId (real "<id>" ou virtual "v<seriesId>_<epoch>") p/ a confirmação.
     handler.setState(handler.data.from, {
       step: ConversationStep.CANCEL_CONFIRM,
-      data: String(appointmentId),
+      data: rowId,
     });
   }
 
@@ -589,20 +605,21 @@ export class WhatsAppMessageHandlers {
       return;
     }
 
-    const appointments = await this.appointmentService.findManyByUserId(userId);
+    const occurrences = await this.appointmentService.listUserOccurrences(userId);
 
-    if (appointments.length === 0) {
+    if (occurrences.length === 0) {
       await handler.sendMessage('text', '📭 Você não tem nenhum agendamento para remarcar.');
       await this.transitionTo(handler, this.homeStep(handler));
       return;
     }
 
-    if (appointments.length === 1) {
-      const apt = appointments[0];
-      this.setRescheduleContext(handler, apt.id, apt.datetime.toISOString());
+    if (occurrences.length === 1) {
+      const occ = occurrences[0];
+      const iso = occ.datetime.toISOString();
+      this.setRescheduleContext(handler, occ.appointmentId ?? 0, iso, occ.seriesId ?? undefined);
       await handler.sendMessage(
         'text',
-        `🔄 Vamos remarcar o agendamento de *${this.formatSlotLabel(apt.datetime.toISOString())}*.`,
+        `🔄 Vamos remarcar o agendamento de *${this.formatSlotLabel(iso)}*.`,
       );
       await this.goToNewSlotPicker(handler);
       return;
@@ -610,16 +627,16 @@ export class WhatsAppMessageHandlers {
 
     // WhatsApp limita listas a 10 linhas; reservamos 1 (Voltar).
     const MAX_ROWS = 9;
-    const shown = appointments.slice(0, MAX_ROWS);
+    const shown = occurrences.slice(0, MAX_ROWS);
     const body =
-      appointments.length > MAX_ROWS
+      occurrences.length > MAX_ROWS
         ? `🔄 Escolha um horário para remarcar (mostrando os ${MAX_ROWS} mais próximos)`
         : '🔄 Escolha um horário para remarcar';
 
     await handler.sendMessage('list', body, [
-      ...shown.map((apt) => ({
-        id: String(apt.id),
-        title: this.slotRowTitle(apt.datetime),
+      ...shown.map((occ) => ({
+        id: occ.rowId,
+        title: this.slotRowTitle(occ.datetime),
       })),
       { id: BACK_ID, title: BACK_LABEL },
     ]);
@@ -638,22 +655,29 @@ export class WhatsAppMessageHandlers {
       return;
     }
 
-    const appointmentId = Number(handler.data.text);
-    if (!appointmentId || Number.isNaN(appointmentId)) {
-      await handler.sendMessage('text', '⚠️ Seleção inválida. Escolha um agendamento da lista.');
+    const parsed = parseOccurrenceRowId(handler.data.text ?? '');
+
+    if (parsed.appointmentId) {
+      let appointment: Awaited<ReturnType<AppointmentService['findUnique']>>;
+      try {
+        appointment = await this.appointmentService.findUnique(parsed.appointmentId);
+      } catch {
+        await handler.sendMessage('text', '🔍 Agendamento não encontrado. Escolha um da lista.');
+        return;
+      }
+      this.setRescheduleContext(handler, appointment.id, appointment.datetime.toISOString());
+      await this.goToNewSlotPicker(handler);
       return;
     }
 
-    let appointment: Awaited<ReturnType<AppointmentService['findUnique']>>;
-    try {
-      appointment = await this.appointmentService.findUnique(appointmentId);
-    } catch {
-      await handler.sendMessage('text', '🔍 Agendamento não encontrado. Escolha um da lista.');
+    // Ocorrência ainda virtual (série fixa): materializa na confirmação.
+    if (parsed.seriesId && parsed.datetime) {
+      this.setRescheduleContext(handler, 0, parsed.datetime.toISOString(), parsed.seriesId);
+      await this.goToNewSlotPicker(handler);
       return;
     }
 
-    this.setRescheduleContext(handler, appointment.id, appointment.datetime.toISOString());
-    await this.goToNewSlotPicker(handler);
+    await handler.sendMessage('text', '⚠️ Seleção inválida. Escolha um agendamento da lista.');
   }
 
   /** Após escolher o agendamento a remarcar: barbeiro digita o novo slot; cliente navega o menu. */
@@ -689,7 +713,17 @@ export class WhatsAppMessageHandlers {
     }
 
     try {
-      await this.appointmentService.reschedule(context.appointmentId, newIso);
+      if (context.seriesId && !context.appointmentId) {
+        // Origem virtual (série fixa): materializa aquela semana no novo horário
+        // (linha real + exceção na data original), sem tocar nas demais semanas.
+        await this.appointmentService.materializeOccurrence(
+          context.seriesId,
+          new Date(context.oldIso),
+          new Date(newIso),
+        );
+      } else {
+        await this.appointmentService.reschedule(context.appointmentId, newIso);
+      }
     } catch (err) {
       log.error(
         'handleRescheduleConfirm: falha ao remarcar',
@@ -729,11 +763,18 @@ export class WhatsAppMessageHandlers {
     handler: MessageHandlerPayload,
     appointmentId: number,
     oldIso: string,
+    seriesId?: number,
   ): void {
     // Preserva o cliente-alvo quando a remarcação é feita pelo barbeiro — este
     // setState sobrescreve o WorkerActionContext, então carregamos o targetUserId.
     const targetUserId = this.getWorkerContext(handler)?.targetUserId;
-    const context: RescheduleContext = { mode: 'reschedule', appointmentId, oldIso, targetUserId };
+    const context: RescheduleContext = {
+      mode: 'reschedule',
+      appointmentId,
+      oldIso,
+      targetUserId,
+      seriesId,
+    };
     handler.setState(handler.data.from, { context: JSON.stringify(context) });
   }
 
@@ -1563,7 +1604,7 @@ export class WhatsAppMessageHandlers {
   ): Promise<void> {
     const iso = apt.datetime.toISOString();
     if (action === 'cancel') {
-      await this.promptCancelConfirm(handler, apt.id, iso);
+      await this.promptCancelConfirm(handler, String(apt.id), iso);
       return;
     }
     this.setRescheduleContext(handler, apt.id, iso);
@@ -2228,7 +2269,12 @@ export class WhatsAppMessageHandlers {
     );
     for (const apt of conflicts) {
       try {
-        await this.appointmentService.cancel(apt.id);
+        if (apt.id) {
+          await this.appointmentService.cancel(apt.id);
+        } else if (apt.fixedSeriesId) {
+          // Ocorrência projetada de série fixa: pula só aquela semana (exceção).
+          await this.appointmentService.skipSeriesOccurrence(apt.fixedSeriesId, apt.datetime);
+        }
       } catch (err) {
         log.error(
           'handleWorkerUnavailConflicts: falha ao cancelar agendamento conflitante',
@@ -2425,7 +2471,7 @@ export class WhatsAppMessageHandlers {
   ): Promise<void> {
     const appointments = await this.appointmentService.findManyByUserId(userId);
     const future = appointments
-      .filter((apt) => apt.datetime.getTime() > Date.now() && !apt.seriesId)
+      .filter((apt) => apt.datetime.getTime() > Date.now() && !apt.fixedSeriesId)
       .sort((a, b) => a.datetime.getTime() - b.datetime.getTime());
 
     if (future.length > 0) {
@@ -2546,13 +2592,9 @@ export class WhatsAppMessageHandlers {
 
   /** Renderiza a confirmação de fixação para um horário ISO e aguarda Sim/Não. */
   private async promptFixConfirm(handler: MessageHandlerPayload, iso: string): Promise<void> {
-    const count = this.countWeeklyOccurrences(new Date(iso));
-    const { lastDay } = this.appointmentService.getBookingWindow();
-    const [, mm, dd] = formatBrazil(lastDay).slice(0, 10).split('-');
-
     await handler.sendMessage(
       'button',
-      `📌 Fixar *${this.formatSlotLabel(iso)}* e repetir *toda semana*?\n\nSerão reservados até ${count} horário(s), até ${dd}/${mm}.`,
+      `📌 Fixar *${this.formatSlotLabel(iso)}* e repetir *toda semana*?\n\nO horário fica reservado indefinidamente (até você desfixar).`,
       [
         {
           id: ScheduleConfirmOption.CONFIRM,
@@ -2598,23 +2640,12 @@ export class WhatsAppMessageHandlers {
         from: handler.data.from,
         targetUserId: ctx.targetUserId,
         iso,
-        ...result,
+        seriesId: result.seriesId,
       });
-      const total = result.created + result.merged;
-      if (total === 0) {
-        // Nenhuma semana reservada — normalmente o horário está ocupado por
-        // outro cliente em todas as semanas da janela.
-        await handler.sendMessage(
-          'text',
-          '⚠️ Não foi possível reservar nenhuma semana nesse horário — ele já está ocupado. Tente outro horário.',
-        );
-      } else {
-        let msg = `✅ Horário fixado! ${total} ocorrência(s) reservada(s) toda semana.`;
-        if (result.skipped > 0) {
-          msg += `\n⚠️ ${result.skipped} semana(s) não reservada(s) (horário já ocupado).`;
-        }
-        await handler.sendMessage('text', msg);
-      }
+      await handler.sendMessage(
+        'text',
+        `✅ Horário fixado! *${this.formatSlotLabel(iso)}* passa a se repetir *toda semana*.`,
+      );
     } catch (err) {
       log.error(
         'handleWorkerFixConfirm: falha ao fixar série',
@@ -2646,7 +2677,7 @@ export class WhatsAppMessageHandlers {
       'list',
       `🗑️ Desfixar *${name}* — escolha qual horário fixo remover:`,
       [
-        ...series.slice(0, 9).map((s) => ({ id: s.seriesId, title: this.seriesLabel(s.next) })),
+        ...series.slice(0, 9).map((s) => ({ id: String(s.seriesId), title: this.seriesLabel(s.next) })),
         { id: BACK_ID, title: BACK_LABEL },
       ],
       { header: 'Desfixar', button: 'Ver horários', sectionTitle: 'Horários fixos' },
@@ -2699,13 +2730,15 @@ export class WhatsAppMessageHandlers {
       return;
     }
 
-    const seriesId = handler.conversationData.data ?? '';
+    const seriesId = Number(handler.conversationData.data ?? '');
+    if (!seriesId || Number.isNaN(seriesId)) {
+      await handler.sendMessage('text', '⚠️ Ocorreu um erro. Vamos recomeçar.');
+      await this.transitionTo(handler, ConversationStep.WORKER_MENU);
+      return;
+    }
     try {
-      const cancelled = await this.appointmentService.cancelSeriesFromNow(seriesId);
-      await handler.sendMessage(
-        'text',
-        `✅ Horário fixo removido. ${cancelled} ocorrência(s) futura(s) cancelada(s).`,
-      );
+      await this.appointmentService.cancelSeriesFromNow(seriesId);
+      await handler.sendMessage('text', '✅ Horário fixo removido. As ocorrências futuras foram liberadas.');
     } catch (err) {
       log.error(
         'handleWorkerUnfixConfirm: falha ao desfixar série',
@@ -2749,21 +2782,6 @@ export class WhatsAppMessageHandlers {
       occ = parseBrazilDateTime(`${nextYmd}T${time}:00`);
     }
     return formatBrazil(occ);
-  }
-
-  /** Quantas ocorrências semanais futuras cabem na janela de agendamento. */
-  private countWeeklyOccurrences(first: Date): number {
-    const { endExclusive } = this.appointmentService.getBookingWindow();
-    const now = Date.now();
-    let count = 0;
-    for (
-      let occ = new Date(first);
-      occ.getTime() < endExclusive.getTime();
-      occ = new Date(occ.getTime() + 7 * ONE_DAY_MS)
-    ) {
-      if (occ.getTime() > now) count++;
-    }
-    return count;
   }
 
   /** Rótulo curto de uma série a partir da próxima ocorrência: "Toda Ter 15:00". */
