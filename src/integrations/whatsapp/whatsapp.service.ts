@@ -111,6 +111,20 @@ export class WhatsAppService {
       return this.conversationData.getState(data.from);
     }
 
+    // Clique num botão de quick reply do template de lembrete de agendamento:
+    // vai direto para o fluxo correspondente, sem o menu/saudação genéricos.
+    const reminderStep = this.matchReminderButtonReply(data.text);
+    if (reminderStep) {
+      this.conversationData.setState(data.from, {
+        step: reminderStep,
+        data: null,
+        userId: user.id,
+        role: 'user',
+        workerId: null,
+      });
+      return this.conversationData.getState(data.from);
+    }
+
     const userHasApt = await this.appointmentService.listUserOccurrences(user.id);
 
     const userStep =
@@ -133,6 +147,14 @@ export class WhatsAppService {
     });
 
     return this.conversationData.getState(data.from);
+  }
+
+  /** Botões de quick reply do template `appointment_reminder` ("Cancelar" / "Remarcar"). */
+  private matchReminderButtonReply(text: string | undefined): ConversationStep | null {
+    const normalized = (text ?? '').trim().toLowerCase();
+    if (normalized === 'cancelar') return ConversationStep.REMINDER_CANCEL;
+    if (normalized === 'remarcar') return ConversationStep.REMINDER_RESCHEDULE;
+    return null;
   }
 
   async handleMessage(data: IncomingMessageParsed): Promise<void> {
@@ -197,6 +219,48 @@ export class WhatsAppService {
       const msg = data.error?.message ?? `HTTP ${res.status}`;
       throw new Error(`WhatsApp API: ${msg}`);
     }
+  }
+
+  /**
+   * Envia uma mensagem de TEMPLATE (HSM) aprovada no Meta Business Manager.
+   *
+   * Fora da janela de 24h de atendimento, a Cloud API só aceita mensagens de
+   * template — mensagens de texto/botão/lista livres (`buildMessageBodyAndSend`)
+   * são rejeitadas. Usado para disparos outbound como o lembrete de agendamento.
+   */
+  async sendTemplateMessage(
+    phoneNumberId: string,
+    to: string,
+    templateName: string,
+    languageCode: string,
+    bodyParams: Array<{ name: string; value: string }> = [],
+  ): Promise<void> {
+    const normalizedTo = to.replace(/\D/g, '');
+
+    const body = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: normalizedTo,
+      type: 'template',
+      template: {
+        name: templateName,
+        language: { code: languageCode },
+        ...(bodyParams.length > 0 && {
+          components: [
+            {
+              type: 'body',
+              parameters: bodyParams.map((p) => ({
+                type: 'text',
+                parameter_name: p.name,
+                text: p.value,
+              })),
+            },
+          ],
+        }),
+      },
+    };
+
+    await this.sendMessage(phoneNumberId, body);
   }
 
   buildMessageBody(

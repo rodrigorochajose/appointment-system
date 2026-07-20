@@ -6,10 +6,11 @@ import { log } from '@/common/logger';
 /**
  * Mantém vivos os canais de push do Google Calendar.
  *
- * Os canais expiram em dias; este cron interno renova os que estão perto de
- * expirar. Roda no próprio app (portável p/ qualquer host). No Render free,
- * depende do serviço estar acordado (UptimeRobot) — em host sempre-ligado roda
- * naturalmente. A renovação é idempotente: só renova quem realmente precisa.
+ * O canal dura até 7 dias (Google pode reduzir); renovamos incondicionalmente
+ * 1x/dia, bem dentro da margem, então não há necessidade de checar expiração
+ * antes de renovar. Roda no próprio app (portável p/ qualquer host). No Render
+ * free, depende do serviço estar acordado (UptimeRobot) — em host sempre-ligado
+ * roda naturalmente. A renovação é idempotente (troca o canal antigo pelo novo).
  */
 @Injectable()
 export class GoogleWatchScheduler implements OnModuleInit {
@@ -20,8 +21,8 @@ export class GoogleWatchScheduler implements OnModuleInit {
     await this.renew('boot');
   }
 
-  /** Renova periodicamente, com folga em relação ao TTL do canal. */
-  @Cron(CronExpression.EVERY_6_HOURS)
+  /** Renova todo dia, incondicionalmente. */
+  @Cron(CronExpression.EVERY_DAY_AT_3AM)
   async handleCron(): Promise<void> {
     await this.renew('cron');
   }

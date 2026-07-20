@@ -35,3 +35,5 @@ services:
         sync: false
       - key: WPP_TOKEN
         sync: false
+      - key: WPP_PHONE_NUMBER_ID
+        sync: false

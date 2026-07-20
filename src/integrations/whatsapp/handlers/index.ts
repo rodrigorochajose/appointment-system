@@ -55,23 +55,13 @@ import { UnavailablePeriodService } from '@/modules/unavailable-period/unavailab
 import { WorkingHourService, WorkingHourWindow } from '@/modules/working-hour/working-hour.service';
 import { toTitleCase } from '@/common/helpers/title-case';
 import { parseDayInput, parseDirectScheduleInput } from '@/common/helpers/parse-direct-schedule';
-import { formatBrazil, parseBrazilDateTime } from '@/common/helpers/brazil-date';
+import { formatBrazil, formatSlotLabel, parseBrazilDateTime } from '@/common/helpers/brazil-date';
 
 /** Profissional padrão enquanto o MVP não tem seleção de barbeiro. */
 const DEFAULT_WORKER_ID = 1;
 
 /** Link da agenda pública — hardcoded por enquanto (mover para config depois). */
 const PUBLIC_AGENDA_URL = 'https://calendar.google.com/calendar/u/0/r';
-
-const WEEKDAY_LABELS = [
-  'domingo',
-  'segunda-feira',
-  'terça-feira',
-  'quarta-feira',
-  'quinta-feira',
-  'sexta-feira',
-  'sábado',
-];
 
 /** Rótulos curtos por weekday (0 = domingo), para o menu de horário de funcionamento. */
 const WEEKDAY_SHORT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -123,6 +113,8 @@ export class WhatsAppMessageHandlers {
     [ConversationStep.CANCEL_CONFIRM_ALL]: (h) => this.handleCancelConfirmAll(h),
     [ConversationStep.RESCHEDULE_MANY]: (h) => this.handleRescheduleMany(h),
     [ConversationStep.RESCHEDULE_CONFIRM]: (h) => this.handleRescheduleConfirm(h),
+    [ConversationStep.REMINDER_CANCEL]: (h) => this.startCancel(h, this.actingUserId(h)),
+    [ConversationStep.REMINDER_RESCHEDULE]: (h) => this.startReschedule(h, this.actingUserId(h)),
     [ConversationStep.SCHEDULE_MENU]: (h) => this.handleScheduleMenu(h),
     [ConversationStep.SCHEDULE_MENU_REPLY]: (h) => this.handleScheduleMenuReply(h),
     [ConversationStep.SCHEDULE_BY_DAY]: (h) => this.handleScheduleByDay(h),
@@ -349,7 +341,7 @@ export class WhatsAppMessageHandlers {
     }
 
     const lines = occurrences
-      .map((occ, i) => `${i + 1}. 🗓️ *${this.formatSlotLabel(occ.datetime.toISOString())}*`)
+      .map((occ, i) => `${i + 1}. 🗓️ *${formatSlotLabel(occ.datetime.toISOString())}*`)
       .join('\n');
 
     await handler.sendMessage('button', `📋 Seus agendamentos:\n\n${lines}`, [
@@ -553,7 +545,7 @@ export class WhatsAppMessageHandlers {
   ): Promise<void> {
     await handler.sendMessage(
       'button',
-      `⚠️ Deseja realmente cancelar o seguinte agendamento?\n\n🗓️ *${this.formatSlotLabel(iso)}*`,
+      `⚠️ Deseja realmente cancelar o seguinte agendamento?\n\n🗓️ *${formatSlotLabel(iso)}*`,
       [
         {
           id: ScheduleConfirmOption.CONFIRM,
@@ -619,7 +611,7 @@ export class WhatsAppMessageHandlers {
       this.setRescheduleContext(handler, occ.appointmentId ?? 0, iso, occ.seriesId ?? undefined);
       await handler.sendMessage(
         'text',
-        `🔄 Vamos remarcar o agendamento de *${this.formatSlotLabel(iso)}*.`,
+        `🔄 Vamos remarcar o agendamento de *${formatSlotLabel(iso)}*.`,
       );
       await this.goToNewSlotPicker(handler);
       return;
@@ -737,7 +729,7 @@ export class WhatsAppMessageHandlers {
       return;
     }
 
-    const doneMessage = `✅ Agendamento remarcado de *${this.formatSlotLabel(context.oldIso)}* para *${this.formatSlotLabel(newIso)}*.`;
+    const doneMessage = `✅ Agendamento remarcado de *${formatSlotLabel(context.oldIso)}* para *${formatSlotLabel(newIso)}*.`;
 
     // Barbeiro: confirma e volta direto ao menu; cliente cai no encerramento padrão.
     if (handler.conversationData.role === 'worker') {
@@ -821,7 +813,7 @@ export class WhatsAppMessageHandlers {
     if (summary.next) {
       const nextName = (await this.userService.getNameById(summary.next.userId)) ?? 'Cliente';
       lines.push(
-        `⏭️ Próximo: *${nextName}* — ${this.formatSlotLabel(summary.next.datetime.toISOString())}.`,
+        `⏭️ Próximo: *${nextName}* — ${formatSlotLabel(summary.next.datetime.toISOString())}.`,
       );
     }
 
@@ -1201,7 +1193,7 @@ export class WhatsAppMessageHandlers {
     if (context) {
       await handler.sendMessage(
         'button',
-        `🔄 Confirma a remarcação de *${this.formatSlotLabel(context.oldIso)}* para *${this.formatSlotLabel(iso)}*?`,
+        `🔄 Confirma a remarcação de *${formatSlotLabel(context.oldIso)}* para *${formatSlotLabel(iso)}*?`,
         buttons,
       );
       handler.setState(handler.data.from, { step: ConversationStep.RESCHEDULE_CONFIRM, data: iso });
@@ -1210,7 +1202,7 @@ export class WhatsAppMessageHandlers {
 
     await handler.sendMessage(
       'button',
-      `📅 Confirma o agendamento para *${this.formatSlotLabel(iso)}*?`,
+      `📅 Confirma o agendamento para *${formatSlotLabel(iso)}*?`,
       buttons,
     );
     handler.setState(handler.data.from, { step: ConversationStep.SCHEDULE_CONFIRMED, data: iso });
@@ -1263,7 +1255,7 @@ export class WhatsAppMessageHandlers {
     if (handler.conversationData.role === 'worker') {
       await handler.sendMessage(
         'text',
-        `✅ Agendamento confirmado!\n\n👤 *Cliente:* ${name}\n🗓️ *Data:* ${this.formatSlotLabel(iso)}`,
+        `✅ Agendamento confirmado!\n\n👤 *Cliente:* ${name}\n🗓️ *Data:* ${formatSlotLabel(iso)}`,
       );
       handler.setState(handler.data.from, { context: null, data: null });
       await this.transitionTo(handler, ConversationStep.WORKER_MENU);
@@ -1272,7 +1264,7 @@ export class WhatsAppMessageHandlers {
 
     await handler.sendMessage(
       'button',
-      `✅ Agendamento confirmado!\n\n👤 *Cliente:* ${name}\n🗓️ *Data:* ${this.formatSlotLabel(iso)}\n\nAté lá! 💈`,
+      `✅ Agendamento confirmado!\n\n👤 *Cliente:* ${name}\n🗓️ *Data:* ${formatSlotLabel(iso)}\n\nAté lá! 💈`,
       [
         { id: CloseMenuOption.BACK, title: CloseMenuLabels[CloseMenuOption.BACK] },
         { id: CloseMenuOption.END, title: CloseMenuLabels[CloseMenuOption.END] },
@@ -1610,7 +1602,7 @@ export class WhatsAppMessageHandlers {
     this.setRescheduleContext(handler, apt.id, iso);
     await handler.sendMessage(
       'text',
-      `🔄 Vamos remarcar o agendamento de *${this.formatSlotLabel(iso)}*.`,
+      `🔄 Vamos remarcar o agendamento de *${formatSlotLabel(iso)}*.`,
     );
     await this.goToNewSlotPicker(handler);
   }
@@ -2212,7 +2204,7 @@ export class WhatsAppMessageHandlers {
     const lines = await Promise.all(
       conflicts.map(async (apt) => {
         const name = (await this.userService.getNameById(apt.userId)) ?? 'Cliente';
-        return `• ${this.formatSlotLabel(apt.datetime.toISOString())} — ${name}`;
+        return `• ${formatSlotLabel(apt.datetime.toISOString())} — ${name}`;
       }),
     );
 
@@ -2594,7 +2586,7 @@ export class WhatsAppMessageHandlers {
   private async promptFixConfirm(handler: MessageHandlerPayload, iso: string): Promise<void> {
     await handler.sendMessage(
       'button',
-      `📌 Fixar *${this.formatSlotLabel(iso)}* e repetir *toda semana*?\n\nO horário fica reservado indefinidamente (até você desfixar).`,
+      `📌 Fixar *${formatSlotLabel(iso)}* e repetir *toda semana*?\n\nO horário fica reservado indefinidamente (até você desfixar).`,
       [
         {
           id: ScheduleConfirmOption.CONFIRM,
@@ -2644,7 +2636,7 @@ export class WhatsAppMessageHandlers {
       });
       await handler.sendMessage(
         'text',
-        `✅ Horário fixado! *${this.formatSlotLabel(iso)}* passa a se repetir *toda semana*.`,
+        `✅ Horário fixado! *${formatSlotLabel(iso)}* passa a se repetir *toda semana*.`,
       );
     } catch (err) {
       log.error(
@@ -2892,14 +2884,5 @@ export class WhatsAppMessageHandlers {
     const [datePart, timePart] = formatBrazil(date).split('T');
     const [, mm, dd] = datePart.split('-');
     return `${WEEKDAY_SHORT[this.brWeekday(date)]} ${dd}/${mm} ${timePart.slice(0, 5)}`;
-  }
-
-  /** Formata um horário ISO para exibição: "quinta-feira, 05/02 às 15:00". */
-  private formatSlotLabel(iso: string): string {
-    const date = new Date(iso);
-    const [datePart, timePart] = formatBrazil(date).split('T');
-    const [, mm, dd] = datePart.split('-');
-    const weekdayIdx = new Date(date.getTime() - 3 * 60 * 60 * 1000).getUTCDay();
-    return `${WEEKDAY_LABELS[weekdayIdx]}, ${dd}/${mm} às ${timePart.slice(0, 5)}`;
   }
 }

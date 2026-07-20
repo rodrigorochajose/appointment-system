@@ -108,8 +108,6 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 /** TTL solicitado ao criar o canal de push (Google pode reduzir). */
 const WATCH_TTL_SECONDS = 7 * 24 * 60 * 60;
-/** Renova o canal quando faltar menos que isto para expirar. */
-const WATCH_RENEW_MARGIN_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Janela de agendamento do cliente: ele só pode agendar de hoje até este número
@@ -626,7 +624,7 @@ export class AppointmentService {
    * perto de expirar (ou ausentes). Acionado pelo cron interno.
    */
   async ensureWatchChannels(): Promise<
-    { workerId: number; renewed?: boolean; skipped?: boolean; error?: boolean }[]
+    { workerId: number; renewed?: boolean; error?: boolean }[]
   > {
     const webhookUrl = process.env.GOOGLE_WEBHOOK_URL;
     if (!webhookUrl) {
@@ -635,20 +633,10 @@ export class AppointmentService {
     }
 
     const accounts = await this.googleAccountService.findAll();
-    const results: { workerId: number; renewed?: boolean; skipped?: boolean; error?: boolean }[] =
-      [];
+    const results: { workerId: number; renewed?: boolean; error?: boolean }[] = [];
 
     for (const account of accounts) {
       try {
-        const exp = account.watchExpiration ? new Date(account.watchExpiration).getTime() : 0;
-        const needsRenew =
-          !account.watchChannelId || !exp || exp - Date.now() < WATCH_RENEW_MARGIN_MS;
-
-        if (!needsRenew) {
-          results.push({ workerId: account.workerId, skipped: true });
-          continue;
-        }
-
         await this.renewWatchForAccount(account, webhookUrl);
         results.push({ workerId: account.workerId, renewed: true });
       } catch (err) {
@@ -866,6 +854,21 @@ export class AppointmentService {
     return [...rows, ...projected].sort(
       (a, b) => a.datetime.getTime() - b.datetime.getTime(),
     );
+  }
+
+  /** Agendamentos de TODOS os profissionais num dia (00:00–24:00 do `dayStart`), reais + projetados. */
+  async findManyOnDay(dayStart: Date): Promise<AppointmentResponseDto[]> {
+    const dayEnd = new Date(dayStart.getTime() + ONE_DAY_MS);
+    const rows = await this.db
+      .select()
+      .from(appointments)
+      .where(and(gte(appointments.datetime, dayStart), lt(appointments.datetime, dayEnd)));
+
+    const projected = (await this.expandSeriesInRange({}, dayStart, dayEnd)).map((p) =>
+      this.projectionToDto(p),
+    );
+
+    return [...rows, ...projected].sort((a, b) => a.datetime.getTime() - b.datetime.getTime());
   }
 
   /** Converte uma ocorrência projetada num DTO sintético (id=0, sem evento próprio). */

@@ -1,6 +1,16 @@
 const BRAZIL_OFFSET = '-03:00';
 const BRAZIL_OFFSET_MS = 3 * 60 * 60 * 1000;
 
+const WEEKDAY_LABELS = [
+  'domingo',
+  'segunda-feira',
+  'terça-feira',
+  'quarta-feira',
+  'quinta-feira',
+  'sexta-feira',
+  'sábado',
+];
+
 function pad2(n: number): string {
   return String(n).padStart(2, '0');
 }
@@ -59,4 +69,13 @@ export function parseBrazilDateTime(value: string): Date {
   }
 
   return d;
+}
+
+/** Formata um horário ISO para exibição: "quinta-feira, 05/02 às 15:00". */
+export function formatSlotLabel(iso: string): string {
+  const date = new Date(iso);
+  const [datePart, timePart] = formatBrazil(date).split('T');
+  const [, mm, dd] = datePart.split('-');
+  const weekdayIdx = new Date(date.getTime() - BRAZIL_OFFSET_MS).getUTCDay();
+  return `${WEEKDAY_LABELS[weekdayIdx]}, ${dd}/${mm} às ${timePart.slice(0, 5)}`;
 }
