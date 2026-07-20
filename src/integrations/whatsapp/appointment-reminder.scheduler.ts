@@ -15,7 +15,7 @@ const TEMPLATE_LANGUAGE = 'pt_BR';
 /**
  * Envia um lembrete por WhatsApp aos clientes com agendamento no dia seguinte.
  *
- * Roda 1x/dia às 18h (horário de Brasília). Como é um disparo outbound puro
+ * Roda 1x/dia às 20h (horário de Brasília). Como é um disparo outbound puro
  * (não nasce de um webhook recebido), o `phone_number_id` do WhatsApp Business
  * vem de env (`WPP_PHONE_NUMBER_ID`) em vez do payload de entrada.
  */
@@ -27,7 +27,7 @@ export class AppointmentReminderScheduler {
     private readonly whatsAppService: WhatsAppService,
   ) {}
 
-  @Cron('0 18 * * *', { timeZone: 'America/Sao_Paulo' })
+  @Cron('0 20 * * *', { timeZone: 'America/Sao_Paulo' })
   async handleCron(): Promise<void> {
     const phoneNumberId = process.env.WPP_PHONE_NUMBER_ID;
     if (!phoneNumberId) {

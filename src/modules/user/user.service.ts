@@ -1,7 +1,7 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DATABASE_CONNECTION } from 'src/database/database.module';
 import { MySql2Database } from 'drizzle-orm/mysql2';
-import { and, eq, like } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { users } from 'src/database/schemas';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -64,19 +64,21 @@ export class UserService {
   }
 
   /**
-   * Busca clientes por nome aproximado (case-insensitive no MySQL).
+   * Busca clientes por nome aproximado, case-insensitive independente da
+   * collation da tabela (força `LOWER()` dos dois lados, já que o `LIKE` do
+   * MySQL só ignora maiúsculas/minúsculas sozinho em collations `_ci`).
    * O termo é quebrado em palavras e cada uma precisa aparecer no nome (AND),
-   * então "joao silva" casa "João da Silva" independentemente da ordem das
-   * palavras intermediárias.
+   * então "steve" ou "steve jobs" casam "Steve Jobs Da Silva" independente da
+   * ordem das palavras intermediárias.
    */
   async findByNameLike(name: string, limit = 25): Promise<UserResponseDto[]> {
-    const tokens = name.trim().split(/\s+/).filter(Boolean);
+    const tokens = name.trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (tokens.length === 0) return [];
 
     return await this.db
       .select()
       .from(users)
-      .where(and(...tokens.map((t) => like(users.name, `%${t}%`))))
+      .where(and(...tokens.map((t) => sql`LOWER(${users.name}) LIKE ${`%${t}%`}`)))
       .limit(limit);
   }
 

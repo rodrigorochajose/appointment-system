@@ -977,6 +977,18 @@ export class AppointmentService {
     const weekday = dayStart.getDay();
     const time = this.formatHour(firstOccurrence);
 
+    // Se já existe um agendamento avulso (com seu próprio evento no Google)
+    // exatamente nesse horário — caso de fixar a partir de um agendamento já
+    // existente do cliente — remove-o antes de criar a série. Senão o evento
+    // avulso e a 1ª ocorrência da série recorrente ficam duplicados no Google.
+    const [existing] = await this.db
+      .select()
+      .from(appointments)
+      .where(and(eq(appointments.workerId, workerId), eq(appointments.datetime, firstOccurrence)));
+    if (existing && existing.userId === userId) {
+      await this.cancel(existing.id);
+    }
+
     const [result] = await this.db.insert(fixedSeries).values({
       workerId,
       userId,
