@@ -14,6 +14,11 @@ export interface WhatsAppWebhookMessageInteractive {
   list_reply?: { id: string; title: string; description?: string };
 }
 
+export interface WhatsAppWebhookMessageButton {
+  payload: string;
+  text: string;
+}
+
 export interface WhatsAppWebhookMessage {
   from: string;
   id: string;
@@ -21,6 +26,8 @@ export interface WhatsAppWebhookMessage {
   type: string;
   text?: WhatsAppWebhookMessageText;
   interactive?: WhatsAppWebhookMessageInteractive;
+  /** Clique em quick reply de mensagem de TEMPLATE (não passa por `interactive`). */
+  button?: WhatsAppWebhookMessageButton;
   /** Outros tipos (image, audio, etc.) têm estruturas próprias. */
   [key: string]: unknown;
 }

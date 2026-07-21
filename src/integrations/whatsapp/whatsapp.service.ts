@@ -62,7 +62,11 @@ export class WhatsAppService {
           const parsed: IncomingMessageParsed = {
             phoneNumberId,
             from: msg.from,
-            text: msg.text?.body ?? msg.interactive?.button_reply?.id ?? msg.interactive?.list_reply?.id,
+            text:
+              msg.text?.body ??
+              msg.button?.text ??
+              msg.interactive?.button_reply?.id ??
+              msg.interactive?.list_reply?.id,
           };
           messages.push(parsed);
         }
@@ -112,11 +116,12 @@ export class WhatsAppService {
     }
 
     // Clique num botão de quick reply do template de lembrete de agendamento:
-    // vai direto para o fluxo correspondente, sem o menu/saudação genéricos.
-    const reminderStep = this.matchReminderButtonReply(data.text);
-    if (reminderStep) {
+    // vai direto para o encerramento ou pro menu, sem a saudação genérica.
+    const reminderIntent = this.matchReminderButtonReply(data.text);
+
+    if (reminderIntent === 'close') {
       this.conversationData.setState(data.from, {
-        step: reminderStep,
+        step: ConversationStep.CLOSE,
         data: null,
         userId: user.id,
         role: 'user',
@@ -129,6 +134,17 @@ export class WhatsAppService {
 
     const userStep =
       userHasApt.length > 0 ? ConversationStep.FULL_MENU : ConversationStep.SCHEDULE_MENU;
+
+    if (reminderIntent === 'menu') {
+      this.conversationData.setState(data.from, {
+        step: userStep,
+        data: null,
+        userId: user.id,
+        role: 'user',
+        workerId: null,
+      });
+      return this.conversationData.getState(data.from);
+    }
 
     await this.buildMessageBodyAndSend(
       data.phoneNumberId,
@@ -149,11 +165,11 @@ export class WhatsAppService {
     return this.conversationData.getState(data.from);
   }
 
-  /** Botões de quick reply do template `appointment_reminder` ("Cancelar" / "Remarcar"). */
-  private matchReminderButtonReply(text: string | undefined): ConversationStep | null {
+  /** Botões de quick reply do template `appointment_reminder` ("Encerrar" / "Acessar o menu"). */
+  private matchReminderButtonReply(text: string | undefined): 'close' | 'menu' | null {
     const normalized = (text ?? '').trim().toLowerCase();
-    if (normalized === 'cancelar') return ConversationStep.REMINDER_CANCEL;
-    if (normalized === 'remarcar') return ConversationStep.REMINDER_RESCHEDULE;
+    if (normalized === 'encerrar') return 'close';
+    if (normalized === 'acessar o menu') return 'menu';
     return null;
   }
 
@@ -193,7 +209,7 @@ export class WhatsAppService {
     });
   }
 
-  async sendMessage(phoneNumberId: string, body: unknown): Promise<void> {
+  async sendMessage(phoneNumberId: string, body: unknown): Promise<string | undefined> {
     const token = process.env.WPP_TOKEN;
     if (!token) {
       throw new Error('WPP_TOKEN não configurado. Defina no .env para enviar mensagens.');
@@ -219,6 +235,8 @@ export class WhatsAppService {
       const msg = data.error?.message ?? `HTTP ${res.status}`;
       throw new Error(`WhatsApp API: ${msg}`);
     }
+
+    return data.messages?.[0]?.id;
   }
 
   /**
@@ -234,7 +252,7 @@ export class WhatsAppService {
     templateName: string,
     languageCode: string,
     bodyParams: Array<{ name: string; value: string }> = [],
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const normalizedTo = to.replace(/\D/g, '');
 
     const body = {
@@ -260,7 +278,7 @@ export class WhatsAppService {
       },
     };
 
-    await this.sendMessage(phoneNumberId, body);
+    return this.sendMessage(phoneNumberId, body);
   }
 
   buildMessageBody(

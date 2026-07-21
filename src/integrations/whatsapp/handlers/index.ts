@@ -60,9 +60,6 @@ import { formatBrazil, formatSlotLabel, parseBrazilDateTime } from '@/common/hel
 /** Profissional padrão enquanto o MVP não tem seleção de barbeiro. */
 const DEFAULT_WORKER_ID = 1;
 
-/** Link da agenda pública — hardcoded por enquanto (mover para config depois). */
-const PUBLIC_AGENDA_URL = 'https://calendar.google.com/calendar/u/0/r';
-
 /** Rótulos curtos por weekday (0 = domingo), para o menu de horário de funcionamento. */
 const WEEKDAY_SHORT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
@@ -113,8 +110,6 @@ export class WhatsAppMessageHandlers {
     [ConversationStep.CANCEL_CONFIRM_ALL]: (h) => this.handleCancelConfirmAll(h),
     [ConversationStep.RESCHEDULE_MANY]: (h) => this.handleRescheduleMany(h),
     [ConversationStep.RESCHEDULE_CONFIRM]: (h) => this.handleRescheduleConfirm(h),
-    [ConversationStep.REMINDER_CANCEL]: (h) => this.startCancel(h, this.actingUserId(h)),
-    [ConversationStep.REMINDER_RESCHEDULE]: (h) => this.startReschedule(h, this.actingUserId(h)),
     [ConversationStep.SCHEDULE_MENU]: (h) => this.handleScheduleMenu(h),
     [ConversationStep.SCHEDULE_MENU_REPLY]: (h) => this.handleScheduleMenuReply(h),
     [ConversationStep.SCHEDULE_BY_DAY]: (h) => this.handleScheduleByDay(h),
@@ -902,7 +897,7 @@ export class WhatsAppMessageHandlers {
 
     await handler.sendMessage(
       'button',
-      `${intro}\n\n✍️ Se já tem um dia e horário em mente, é só digitar.\nExemplo: *05/02 15:00*\n\n🔗 Para visualizar a agenda, acesse o link abaixo e depois digite o dia e o horário desejados:\n${PUBLIC_AGENDA_URL}\n\n👇 Caso prefira buscar de outra forma, use os botões abaixo.`,
+      `${intro}\n\n✍️ Se já tem um dia e horário em mente, é só digitar.\nExemplo: *05/02 15:00*\n\n👇 Caso prefira buscar de outra forma, use os botões abaixo.`,
       buttons,
     );
 

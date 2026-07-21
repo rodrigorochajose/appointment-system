@@ -8,7 +8,11 @@ import { log } from '@/common/logger';
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Template aprovado no Meta Business Manager (categoria UTILITY). */
+/**
+ * Template aprovado no Meta Business Manager (categoria UTILITY).
+ * Botões de quick reply do template: "Encerrar" e "Acessar o menu" — o texto
+ * precisa bater exatamente com o `matchReminderButtonReply` em whatsapp.service.ts.
+ */
 const TEMPLATE_NAME = 'appointment_reminder';
 const TEMPLATE_LANGUAGE = 'pt_BR';
 
@@ -47,7 +51,7 @@ export class AppointmentReminderScheduler {
         const [datePart, timePart] = formatBrazil(occ.datetime).split('T');
         const [, mm, dd] = datePart.split('-');
 
-        await this.whatsAppService.sendTemplateMessage(
+        const messageId = await this.whatsAppService.sendTemplateMessage(
           phoneNumberId,
           user.phone,
           TEMPLATE_NAME,
@@ -58,6 +62,11 @@ export class AppointmentReminderScheduler {
             { name: 'hour', value: timePart.slice(0, 5) },
           ],
         );
+
+        log.info('AppointmentReminderScheduler: lembrete enviado', {
+          userId: occ.userId,
+          messageId,
+        });
       } catch (err) {
         log.error(
           'AppointmentReminderScheduler: falha ao enviar lembrete',
